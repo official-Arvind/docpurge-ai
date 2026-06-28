@@ -1,0 +1,14 @@
+{
+  "name": "docpurge-ai-test",
+  "version": "1.0.0",
+  "description": "DocPurge AI — Watermark test runner",
+  "private": true,
+  "scripts": {
+    "test": "node test-watermark.js",
+    "test:strict": "node test-watermark.js --strict",
+    "test:dry": "node test-watermark.js --dry-run"
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  }
+}

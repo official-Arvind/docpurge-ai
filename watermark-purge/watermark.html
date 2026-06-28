@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#080b14" />
+
+  <title>Watermark Purge — DocPurge AI by Jigar Corp</title>
+  <meta name="description" content="Remove PDF watermarks natively in your browser. No uploads. No rasterization. Gemini AI-assisted detection for stubborn watermarks. 100% local." />
+  <meta name="robots" content="index, follow" />
+
+  <link rel="icon" type="image/png" href="../assets/img/logo.png" />
+  <link rel="apple-touch-icon"     href="../assets/img/logo.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="../assets/css/tailwind-output.css" />
+
+  <style>
+    /* ── TOOL PAGE LAYOUT ─────────────────────────────── */
+    .tool-layout {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 28px;
+      align-items: start;
+    }
+    @media (max-width: 960px) {
+      .tool-layout { grid-template-columns: 1fr; }
+    }
+
+    .tool-main { display: flex; flex-direction: column; gap: 20px; }
+    .tool-sidebar { display: flex; flex-direction: column; gap: 20px; position: sticky; top: 84px; }
+
+    /* ── PANEL CARD ───────────────────────────────────── */
+    .panel {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .panel-title {
+      font-size: 0.88rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      letter-spacing: 0.01em;
+    }
+    .panel-body { padding: 24px; }
+
+    /* ── UPLOAD ───────────────────────────────────────── */
+    .upload-inner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      pointer-events: none;
+    }
+    .upload-icon {
+      width: 72px; height: 72px;
+      background: rgba(0,255,136,0.08);
+      border: 1px solid rgba(0,255,136,0.2);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      transition: all 0.3s;
+    }
+    .upload-zone:hover .upload-icon,
+    .upload-zone.drag-over .upload-icon {
+      background: rgba(0,255,136,0.14);
+      border-color: var(--green);
+      transform: scale(1.05);
+      filter: drop-shadow(0 0 12px rgba(0,255,136,0.4));
+    }
+    .upload-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+    .upload-sub {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .upload-hint {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: rgba(0,255,136,0.6);
+      background: rgba(0,255,136,0.06);
+      border: 1px solid rgba(0,255,136,0.12);
+      padding: 4px 12px;
+      border-radius: 100px;
+    }
+
+    /* ── FILE INFO ────────────────────────────────────── */
+    #file-info {
+      display: none;
+      background: rgba(0,195,255,0.04);
+      border: 1px solid rgba(0,195,255,0.15);
+      border-radius: var(--radius);
+      padding: 16px 20px;
+      gap: 16px;
+      align-items: center;
+    }
+    #file-info.show { display: flex; }
+    .file-icon {
+      font-size: 2rem;
+      flex-shrink: 0;
+    }
+    .file-meta { flex: 1; min-width: 0; }
+    .file-name {
+      font-weight: 700;
+      font-size: 0.9rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-size {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--blue);
+      margin-top: 2px;
+    }
+    .file-pages {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--text-muted);
+    }
+    .btn-remove-file {
+      background: none;
+      border: none;
+      color: rgba(248,113,113,0.6);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: 4px;
+      transition: color 0.2s;
+      font-size: 1.1rem;
+    }
+    .btn-remove-file:hover { color: #f87171; }
+
+    /* ── SETTINGS PANEL ───────────────────────────────── */
+    .settings-row {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .field-label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .field-hint {
+      font-size: 0.75rem;
+      color: rgba(255,255,255,0.25);
+      margin-top: 5px;
+      line-height: 1.4;
+    }
+    .api-key-wrap {
+      position: relative;
+    }
+    .api-key-wrap .input-field { padding-right: 44px; }
+    .btn-toggle-key {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: color 0.2s;
+      padding: 2px;
+      font-size: 1rem;
+    }
+    .btn-toggle-key:hover { color: var(--green); }
+
+    /* ── PHASE SECTION ────────────────────────────────── */
+    .phases-wrap { display: none; flex-direction: column; gap: 20px; }
+    .phases-wrap.show { display: flex; }
+
+    /* ── HINT PANEL ───────────────────────────────────── */
+    .hint-panel {
+      display: none;
+      background: rgba(251,191,36,0.04);
+      border: 1px solid rgba(251,191,36,0.2);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .hint-panel.show { display: block; }
+
+    /* ── GEMINI PANEL ─────────────────────────────────── */
+    .gemini-panel {
+      display: none;
+      background: rgba(0,195,255,0.03);
+      border: 1px solid rgba(0,195,255,0.2);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .gemini-panel.show { display: block; }
+
+    /* ── DOWNLOAD PANEL ───────────────────────────────── */
+    #download-panel {
+      display: none;
+      background: rgba(0,255,136,0.04);
+      border: 1px solid rgba(0,255,136,0.25);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      text-align: center;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+    #download-panel.show { display: flex; }
+
+    /* ── RESULT INDICATOR ─────────────────────────────── */
+    .result-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 100px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .result-success { background: rgba(0,255,136,0.1); color: var(--green); border: 1px solid rgba(0,255,136,0.25); }
+    .result-warn    { background: rgba(251,191,36,0.1); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
+    .result-error   { background: rgba(248,113,113,0.1); color: #f87171; border: 1px solid rgba(248,113,113,0.25); }
+
+    /* ── PAGE HEADER ──────────────────────────────────── */
+    .page-header {
+      background: var(--bg-1);
+      border-bottom: 1px solid var(--border);
+      padding: 32px 24px;
+    }
+    .page-header-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+    }
+    .breadcrumb a { color: var(--text-muted); transition: color 0.2s; }
+    .breadcrumb a:hover { color: var(--green); }
+    .breadcrumb-sep { opacity: 0.4; }
+
+    /* ── WATERMARK CANDIDATES LIST ───────────────────── */
+    .candidates-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .candidate-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      gap: 12px;
+    }
+    .candidate-text {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--text);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .candidate-tag {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: #fbbf24;
+      background: rgba(251,191,36,0.1);
+      border: 1px solid rgba(251,191,36,0.2);
+      padding: 2px 6px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .btn-purge-candidate {
+      background: rgba(248,113,113,0.1);
+      border: 1px solid rgba(248,113,113,0.2);
+      color: #f87171;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    .btn-purge-candidate:hover {
+      background: rgba(248,113,113,0.2);
+      border-color: rgba(248,113,113,0.4);
+    }
+
+    /* Checkbox style */
+    .checkbox-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+    .checkbox-wrap input[type="checkbox"] {
+      accent-color: var(--green);
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ HEADER ════════════════════════════════ -->
+<header class="site-header" id="site-header">
+  <div class="header-inner">
+    <a href="../index.html" class="logo-link" aria-label="DocPurge AI home">
+      <img src="../assets/img/logo.png" alt="DocPurge AI Logo" class="logo-img" />
+      <span class="logo-name">DocPurge AI</span>
+      <span class="logo-tag">v1.0 BETA</span>
+    </a>
+    <nav class="main-nav" id="main-nav" role="navigation">
+      <a href="../home/home.html" class="nav-link">← All Tools</a>
+      <a href="../home/home.html#features" class="nav-link">Features</a>
+      <a href="../home/home.html#faq" class="nav-link">FAQ</a>
+    </nav>
+    <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+  <div class="mobile-nav" id="mobile-nav">
+    <a href="../home/home.html" class="mobile-nav-link">← All Tools</a>
+    <a href="../home/home.html#faq" class="mobile-nav-link">FAQ</a>
+  </div>
+</header>
+
+<!-- ═══════════════ PAGE HEADER ══════════════════════════ -->
+<div class="page-header">
+  <div class="page-header-inner">
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+      <a href="../home/home.html">DocPurge AI</a>
+      <span class="breadcrumb-sep">›</span>
+      <span style="color:var(--text);">Watermark Purge</span>
+    </nav>
+    <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:16px;">
+      <div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+          <h1 style="font-size:clamp(1.6rem,3vw,2.2rem);font-weight:900;letter-spacing:-0.03em;">
+            🔥 Watermark Purge
+          </h1>
+          <span class="badge" style="font-size:0.65rem;">● LIVE</span>
+        </div>
+        <p style="color:var(--text-muted);font-size:0.9rem;max-width:580px;">
+          Surgically strip watermarks from PDFs in your browser. No uploads. No rasterization.
+          5-phase engine with Gemini 3.5 Flash / 3.1 Pro AI assist for stubborn marks.
+        </p>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <span class="badge">🔒 Local Only</span>
+        <span class="badge badge-blue">∞ No Size Limit</span>
+        <span class="badge" style="color:#a78bfa;background:rgba(167,139,250,0.08);border-color:rgba(167,139,250,0.2);">🤖 AI Assist</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ TOOL LAYOUT ══════════════════════════ -->
+<div class="tool-layout">
+
+  <!-- ───── MAIN COLUMN ──────────────────────────────── -->
+  <div class="tool-main">
+
+    <!-- 1. UPLOAD ZONE -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">📄 PDF Input</span>
+        <span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted);">Drag & drop or click to select</span>
+      </div>
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-label="Upload PDF file">
+          <input type="file" id="file-input" accept=".pdf,application/pdf" style="display:none;" />
+          <div class="upload-inner">
+            <div class="upload-icon">📑</div>
+            <div class="upload-title">Drop your PDF here</div>
+            <div class="upload-sub">or click to browse from your device</div>
+            <div class="upload-hint">No size limit — 200 MB, 500 MB, whatever.</div>
+          </div>
+        </div>
+
+        <!-- File info -->
+        <div id="file-info">
+          <div class="file-icon">📄</div>
+          <div class="file-meta">
+            <div class="file-name" id="file-name">filename.pdf</div>
+            <div class="file-size" id="file-size">0 MB</div>
+            <div class="file-pages" id="file-pages">— pages</div>
+          </div>
+          <button class="btn-remove-file" id="btn-remove-file" title="Remove file" aria-label="Remove file">✕</button>
+        </div>
+
+        <!-- Purge button -->
+        <button class="btn btn-primary" id="btn-start-purge" disabled style="width:100%;justify-content:center;padding:16px;font-size:1rem;opacity:0.4;cursor:not-allowed;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          Start Watermark Purge
+        </button>
+      </div>
+    </div>
+
+    <!-- 2. PHASE STATUS (hidden until purge starts) -->
+    <div class="panel phases-wrap" id="phases-panel">
+      <div class="panel-header">
+        <span class="panel-title">⚙️ Processing Pipeline</span>
+        <span id="overall-status" style="font-family:var(--mono);font-size:0.7rem;color:var(--text-muted);">IDLE</span>
+      </div>
+      <div class="panel-body">
+        <!-- Progress bar -->
+        <div class="progress-bar-wrap" style="margin-bottom:20px;">
+          <div class="progress-bar-fill" id="main-progress" style="width:0%;"></div>
+        </div>
+
+        <div class="phase-list" id="phase-list">
+          <div class="phase-item" id="phase-1">
+            <div class="phase-num">1</div>
+            <div class="phase-label">Auto-Detection — Scanning PDF structure</div>
+            <div class="phase-status" id="phase-1-status">WAITING</div>
+          </div>
+          <div class="phase-item" id="phase-2">
+            <div class="phase-num">2</div>
+            <div class="phase-label">Native Removal — Deleting watermark objects</div>
+            <div class="phase-status" id="phase-2-status">WAITING</div>
+          </div>
+          <div class="phase-item" id="phase-3">
+            <div class="phase-num">3</div>
+            <div class="phase-label">Hint Mode — User-guided search</div>
+            <div class="phase-status" id="phase-3-status">SKIPPED</div>
+          </div>
+          <div class="phase-item" id="phase-4">
+            <div class="phase-num">4</div>
+            <div class="phase-label">Gemini AI Assist — Intelligent identification</div>
+            <div class="phase-status" id="phase-4-status">SKIPPED</div>
+          </div>
+          <div class="phase-item" id="phase-5">
+            <div class="phase-num">5</div>
+            <div class="phase-label">Final Export — Assembling clean PDF</div>
+            <div class="phase-status" id="phase-5-status">WAITING</div>
+          </div>
+        </div>
+
+        <!-- Detected candidates -->
+        <div id="candidates-section" style="display:none;margin-top:20px;">
+          <div style="font-size:0.82rem;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.08em;">
+            Detected Watermark Objects
+          </div>
+          <div class="candidates-list" id="candidates-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. HINT PANEL (Phase 3 fallback) -->
+    <div class="hint-panel" id="hint-panel">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:1.3rem;">💬</span>
+        <div>
+          <div style="font-weight:700;font-size:0.95rem;">Phase 3 — Hint Mode</div>
+          <div style="font-size:0.8rem;color:var(--text-muted);">Auto-detection found nothing obvious. Give us a clue.</div>
+        </div>
+      </div>
+      <label class="field-label" for="watermark-hint">Watermark text hint</label>
+      <input
+        type="text"
+        id="watermark-hint"
+        class="input-field"
+        placeholder="e.g.  CONFIDENTIAL,  DRAFT,  Sample Only..."
+        autocomplete="off"
+      />
+      <div class="field-hint">Type part of the watermark text you can see in the PDF. Case-insensitive.</div>
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;">
+        <button class="btn btn-outline" id="btn-hint-search" style="flex:1;justify-content:center;">
+          🔍 Search with Hint
+        </button>
+        <button class="btn btn-blue" id="btn-hint-gemini" style="flex:1;justify-content:center;">
+          🤖 Use Gemini AI
+        </button>
+      </div>
+    </div>
+
+    <!-- 4. GEMINI PANEL (Phase 4) -->
+    <div class="gemini-panel" id="gemini-panel">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <span style="font-size:1.4rem;">🤖</span>
+        <div>
+          <div style="font-weight:700;font-size:0.95rem;">Phase 4 — Gemini AI Assist</div>
+          <div style="font-size:0.8rem;color:var(--text-muted);">AI will identify the exact watermark string from page text.</div>
+        </div>
+      </div>
+      <div style="background:rgba(0,195,255,0.06);border:1px solid rgba(0,195,255,0.15);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:0.8rem;color:var(--text-muted);line-height:1.6;">
+        🔒 <strong style="color:var(--text);">Your key is session-only.</strong> Stored in a JS variable. Never logged, never sent to DocPurge servers. Cleared on tab close.
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label class="field-label" for="gemini-key-input">Gemini API Key</label>
+          <div class="api-key-wrap">
+            <input
+              type="password"
+              id="gemini-key-input"
+              class="input-field input-mono"
+              placeholder="AIza..."
+              autocomplete="off"
+            />
+            <button class="btn-toggle-key" id="btn-toggle-key" aria-label="Toggle key visibility">👁</button>
+          </div>
+          <div class="field-hint">Get your key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--blue);">Google AI Studio</a> — free tier available.</div>
+        </div>
+
+        <div>
+          <label class="field-label" for="gemini-model-select">Model</label>
+          <select id="gemini-model-select" class="select-field">
+            <option value="gemini-3.5-flash">Gemini 3.5 Flash — Fast · Recommended</option>
+            <option value="gemini-3.1-pro">Gemini 3.1 Pro — Most Accurate · 2M context</option>
+            <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite — Cheapest · Simple marks</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="field-label" for="gemini-hint-ai">Watermark hint for AI</label>
+          <input
+            type="text"
+            id="gemini-hint-ai"
+            class="input-field"
+            placeholder="e.g.  CONFIDENTIAL  or  draft watermark"
+            autocomplete="off"
+          />
+        </div>
+
+        <button class="btn btn-blue" id="btn-run-gemini" style="width:100%;justify-content:center;padding:14px;">
+          🚀 Identify Watermark with Gemini
+        </button>
+
+        <!-- Gemini result -->
+        <div id="gemini-result" style="display:none;">
+          <div style="font-size:0.8rem;font-weight:600;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.08em;">
+            Gemini Identified:
+          </div>
+          <div id="gemini-result-box" style="background:var(--bg-3);border:1px solid var(--border);border-radius:8px;padding:12px 16px;font-family:var(--mono);font-size:0.85rem;color:var(--green);"></div>
+          <button class="btn btn-primary" id="btn-purge-gemini-result" style="width:100%;justify-content:center;margin-top:12px;padding:14px;">
+            ⚡ Purge This Watermark
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. DOWNLOAD PANEL -->
+    <div id="download-panel">
+      <div style="font-size:3rem;filter:drop-shadow(0 0 20px rgba(0,255,136,0.5));">✅</div>
+      <div style="font-size:1.2rem;font-weight:900;color:var(--green);">Purge Complete!</div>
+      <div id="download-summary" style="font-size:0.85rem;color:var(--text-muted);text-align:center;"></div>
+      <button class="btn btn-primary" id="btn-download" style="padding:16px 40px;font-size:1rem;gap:10px;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Purged PDF
+      </button>
+      <button class="btn btn-outline" id="btn-process-another" style="padding:10px 24px;font-size:0.85rem;">
+        Process Another PDF
+      </button>
+    </div>
+
+  </div><!-- /tool-main -->
+
+  <!-- ───── SIDEBAR ──────────────────────────────────── -->
+  <div class="tool-sidebar">
+
+    <!-- Settings -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">⚙️ Settings</span>
+      </div>
+      <div class="panel-body">
+        <div class="settings-row">
+          <div>
+            <label class="field-label">Purge Mode</label>
+            <select id="purge-mode" class="select-field">
+              <option value="auto">🔍 Auto (Recommended)</option>
+              <option value="aggressive">⚡ Aggressive — Remove all low-opacity text</option>
+              <option value="text-only">📝 Text-only — Skip image watermarks</option>
+              <option value="image-only">🖼️ Image-only — Skip text stamps</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="field-label">Opacity Threshold</label>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <input type="range" id="opacity-threshold" min="1" max="80" value="30"
+                style="flex:1;accent-color:var(--green);" />
+              <span id="opacity-val" style="font-family:var(--mono);font-size:0.8rem;color:var(--green);min-width:36px;">30%</span>
+            </div>
+            <div class="field-hint">Text/images at or below this opacity will be treated as watermarks.</div>
+          </div>
+
+          <label class="checkbox-wrap">
+            <input type="checkbox" id="chk-remove-xobj" checked />
+            Remove Form XObjects (overlay watermarks)
+          </label>
+
+          <label class="checkbox-wrap">
+            <input type="checkbox" id="chk-remove-ocg" checked />
+            Remove Optional Content Groups (OCG layers)
+          </label>
+
+          <label class="checkbox-wrap">
+            <input type="checkbox" id="chk-preserve-meta" />
+            Preserve original PDF metadata
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Log Terminal -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">📟 Live Log</span>
+        <button id="btn-clear-log" style="font-family:var(--mono);font-size:0.65rem;color:var(--text-muted);background:none;border:none;cursor:pointer;transition:color 0.2s;" onmouseenter="this.style.color='var(--green)'" onmouseleave="this.style.color='var(--text-muted)'">CLEAR</button>
+      </div>
+      <div class="terminal" style="border:none;border-radius:0;">
+        <div class="terminal-body" id="tool-log-body" style="min-height:260px;max-height:400px;font-size:0.75rem;"></div>
+      </div>
+    </div>
+
+    <!-- Info card -->
+    <div class="panel" style="background:rgba(0,255,136,0.03);border-color:rgba(0,255,136,0.12);">
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:12px;">
+        <div style="font-size:0.82rem;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:0.08em;">💡 Tech Stack</div>
+        <div style="display:flex;flex-direction:column;gap:8px;font-size:0.8rem;color:var(--text-muted);">
+          <div style="display:flex;justify-content:space-between;">
+            <span>PDF Manipulation</span>
+            <code style="color:var(--text);font-size:0.75rem;">pdf-lib 1.17</code>
+          </div>
+          <div style="display:flex;justify-content:space-between;">
+            <span>Text Extraction</span>
+            <code style="color:var(--text);font-size:0.75rem;">pdf.js 4.x</code>
+          </div>
+          <div style="display:flex;justify-content:space-between;">
+            <span>AI Engine</span>
+            <code style="color:var(--text);font-size:0.75rem;">Gemini 3.5 Flash</code>
+          </div>
+          <div style="display:flex;justify-content:space-between;">
+            <span>Thread Model</span>
+            <code style="color:var(--text);font-size:0.75rem;">Web Worker</code>
+          </div>
+          <div style="display:flex;justify-content:space-between;">
+            <span>Server Calls</span>
+            <code style="color:var(--green);font-size:0.75rem;">ZERO</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /tool-sidebar -->
+</div><!-- /tool-layout -->
+
+<!-- ═══════════════ FOOTER ═══════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div class="footer-copy">© 2026 Jigar Corp · Watermark Purge v1.0 · 100% Local Processing</div>
+    <div class="footer-links">
+      <a href="../home/home.html" class="footer-link">← All Tools</a>
+      <a href="../home/home.html#faq" class="footer-link">FAQ</a>
+    </div>
+  </div>
+</footer>
+
+<!-- ─── SCRIPTS ───────────────────────────────────────── -->
+<!-- pdf-lib CDN -->
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<!-- pdf.js CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.3.136/pdf.min.mjs" type="module" id="pdfjs-main"></script>
+
+<script src="../assets/js/core-ui.js"></script>
+<script type="module" src="watermark-logic.js"></script>
+</body>
+</html>

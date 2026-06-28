@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#080b14" />
+
+  <title>DocPurge AI — PDF Utility Suite by Jigar Corp</title>
+  <meta name="description" content="DocPurge AI is a zero-server PDF utility suite. Erase watermarks, manipulate PDFs, and process documents 100% locally in your browser. No uploads. No leaks." />
+  <meta name="keywords" content="PDF watermark remover, remove watermark from PDF, free PDF tool, client-side PDF, pdf-lib, DocPurge AI, Jigar Corp" />
+  <meta name="author" content="Jigar Corp / Arvind" />
+  <meta name="robots" content="index, follow" />
+
+  <meta property="og:type"        content="website" />
+  <meta property="og:title"       content="DocPurge AI — Erase Watermarks. Leave No Trace." />
+  <meta property="og:description" content="100% local PDF surgery. No uploads. No rasterization. No corporate surveillance." />
+  <meta property="og:image"       content="../assets/img/og-image.png" />
+  <meta property="og:url"         content="" />
+
+  <meta name="twitter:card"        content="summary_large_image" />
+  <meta name="twitter:title"       content="DocPurge AI — PDF Utility Suite" />
+  <meta name="twitter:description" content="Strip watermarks natively. Keep vectors. 100% local." />
+  <meta name="twitter:image"       content="../assets/img/og-image.png" />
+
+  <link rel="icon" type="image/png" href="../assets/img/logo.png" />
+  <link rel="apple-touch-icon"     href="../assets/img/logo.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="../assets/css/tailwind-output.css" />
+
+  <style>
+    /* ── HOME-SPECIFIC STYLES ─────────────────────────── */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      overflow: hidden;
+    }
+    .hero-content {
+      position: relative;
+      z-index: 2;
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 100px 24px 80px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 64px;
+      align-items: center;
+    }
+    @media (max-width: 900px) {
+      .hero-content { grid-template-columns: 1fr; gap: 40px; padding: 100px 20px 60px; }
+      .hero-right { order: -1; }
+      .hero-terminal-wrap { max-width: 100%; }
+    }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    .hero-h1 {
+      font-size: clamp(2.4rem, 5vw, 3.8rem);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1.08;
+      margin-bottom: 20px;
+    }
+    .hero-sub {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+      margin-bottom: 36px;
+      max-width: 480px;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .hero-stats {
+      display: flex;
+      gap: 32px;
+      margin-top: 40px;
+      flex-wrap: wrap;
+    }
+    .stat-item { }
+    .stat-num {
+      font-size: 1.5rem;
+      font-weight: 900;
+      background: linear-gradient(90deg, var(--green), var(--blue));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .hero-right {
+      position: relative;
+    }
+    .hero-terminal-wrap {
+      position: relative;
+    }
+    .hero-glow {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 400px; height: 300px;
+      background: radial-gradient(ellipse at center, rgba(0,255,136,0.12) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .hero-terminal-wrap .terminal { position: relative; z-index: 1; }
+
+    /* ── TOOLS SECTION ────────────────────────────────── */
+    .tools-section {
+      background: var(--bg-1);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* ── FEATURES ─────────────────────────────────────── */
+    .features-section { }
+
+    /* ── HOW IT WORKS ─────────────────────────────────── */
+    .hiw-steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 24px;
+      counter-reset: step;
+    }
+    .hiw-step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 32px 28px;
+      position: relative;
+      counter-increment: step;
+      transition: all 0.3s;
+    }
+    .hiw-step:hover {
+      border-color: rgba(0,195,255,0.25);
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-b);
+    }
+    .hiw-step::before {
+      content: '0' counter(step);
+      position: absolute;
+      top: 20px; right: 24px;
+      font-family: var(--mono);
+      font-size: 2rem;
+      font-weight: 700;
+      color: rgba(0,195,255,0.08);
+      line-height: 1;
+    }
+    .hiw-icon {
+      font-size: 1.8rem;
+      margin-bottom: 16px;
+    }
+    .hiw-title {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .hiw-desc {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.65;
+    }
+
+    /* ── COMING SOON CHIP ─────────────────────────────── */
+    .chip-soon {
+      font-family: var(--mono);
+      font-size: 0.62rem;
+      color: #a78bfa;
+      background: rgba(167,139,250,0.1);
+      border: 1px solid rgba(167,139,250,0.2);
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+
+    /* ── BG GRID ──────────────────────────────────────── */
+    .bg-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,255,136,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,255,136,0.03) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════ HEADER ════════════════════════════════ -->
+<header class="site-header" id="site-header">
+  <div class="header-inner">
+    <a href="../index.html" class="logo-link" aria-label="DocPurge AI home">
+      <img src="../assets/img/logo.png" alt="DocPurge AI Logo" class="logo-img" />
+      <span class="logo-name">DocPurge AI</span>
+      <span class="logo-tag">v1.0 BETA</span>
+    </a>
+
+    <nav class="main-nav" id="main-nav" role="navigation" aria-label="Main navigation">
+      <a href="#tools"    class="nav-link">Tools</a>
+      <a href="#features" class="nav-link">Features</a>
+      <a href="#how"      class="nav-link">How It Works</a>
+      <a href="#faq"      class="nav-link">FAQ</a>
+      <a href="../watermark-purge/watermark.html" class="nav-cta">⚡ Launch Tool</a>
+    </nav>
+
+    <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+  <div class="mobile-nav" id="mobile-nav" aria-hidden="true">
+    <a href="#tools"    class="mobile-nav-link">Tools</a>
+    <a href="#features" class="mobile-nav-link">Features</a>
+    <a href="#how"      class="mobile-nav-link">How It Works</a>
+    <a href="#faq"      class="mobile-nav-link">FAQ</a>
+    <a href="../watermark-purge/watermark.html" class="mobile-nav-link" style="color:var(--green);font-weight:700;">⚡ Launch Watermark Purge</a>
+  </div>
+</header>
+
+<!-- ═══════════════ HERO ══════════════════════════════════ -->
+<section class="hero" id="hero">
+  <div class="hero-bg"></div>
+  <div class="bg-grid"></div>
+  <div class="hero-noise"></div>
+
+  <div class="hero-content">
+    <!-- LEFT COPY -->
+    <div class="hero-left">
+      <div class="hero-eyebrow reveal">
+        <span class="badge">🔒 100% Client-Side</span>
+        <span class="badge badge-blue">No Uploads</span>
+      </div>
+
+      <h1 class="hero-h1 reveal reveal-delay-1">
+        Erase Watermarks.<br />
+        <span class="grad-text">Leave No Trace.</span>
+      </h1>
+
+      <p class="hero-sub reveal reveal-delay-2">
+        DocPurge AI surgically removes watermarks from PDFs at the byte level —
+        directly in your browser. Zero rasterization. Zero cloud. Zero compromise.
+      </p>
+
+      <div class="hero-actions reveal reveal-delay-3">
+        <a href="../watermark-purge/watermark.html" class="btn btn-primary" id="hero-cta-main">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          Purge Watermarks Now
+        </a>
+        <a href="#features" class="btn btn-outline" id="hero-cta-features">Learn How It Works</a>
+      </div>
+
+      <div class="hero-stats reveal reveal-delay-4">
+        <div class="stat-item">
+          <div class="stat-num">∞</div>
+          <div class="stat-label">File Size Limit</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">0</div>
+          <div class="stat-label">Data Uploaded</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">5</div>
+          <div class="stat-label">Purge Phases</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-num">AI</div>
+          <div class="stat-label">Gemini Assist</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT TERMINAL -->
+    <div class="hero-right reveal reveal-delay-2">
+      <div class="hero-terminal-wrap">
+        <div class="hero-glow"></div>
+        <div class="terminal" role="log" aria-label="Live processing log">
+          <div class="terminal-bar">
+            <span class="dot dot-r"></span>
+            <span class="dot dot-y"></span>
+            <span class="dot dot-g"></span>
+            <span class="terminal-title">docpurge-engine v1.0 — live purge simulation</span>
+          </div>
+          <div class="terminal-body" id="hero-terminal-body"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ TOOLS GRID ═══════════════════════════ -->
+<section class="tools-section" id="tools">
+  <div class="section">
+    <div class="section-label reveal">// TOOL SUITE</div>
+    <h2 class="reveal" style="font-size:clamp(1.6rem,3vw,2.4rem);font-weight:900;margin-bottom:12px;">
+      Every PDF tool you'll ever need.<br />
+      <span class="grad-text-rev">None of your data leaves the browser.</span>
+    </h2>
+    <p class="reveal reveal-delay-1" style="color:var(--text-muted);margin-bottom:48px;max-width:560px;font-size:0.95rem;">
+      Built with <code style="color:var(--green)">pdf-lib</code> and <code style="color:var(--blue)">pdf.js</code>.
+      No Node.js, no Python, no servers. Ever.
+    </p>
+
+    <div class="tool-grid">
+      <!-- Watermark Purge -->
+      <a href="../watermark-purge/watermark.html" class="tool-card reveal" id="card-watermark-purge">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="tool-icon-wrap tool-icon-green">🔥</div>
+          <span class="tool-badge live">● LIVE</span>
+        </div>
+        <div>
+          <div class="tool-name">Watermark Purge</div>
+          <div class="tool-desc">
+            Surgically remove text & image watermarks from any PDF. 5-phase engine with
+            Gemini AI assist. Native removal — vectors stay crisp, text stays searchable.
+          </div>
+        </div>
+        <div class="tool-link">
+          Launch Tool
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </a>
+
+      <!-- PDF Compressor -->
+      <div class="tool-card reveal reveal-delay-1" id="card-pdf-compressor" style="opacity:0.6;cursor:not-allowed;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="tool-icon-wrap tool-icon-blue">📦</div>
+          <span class="chip-soon">COMING SOON</span>
+        </div>
+        <div>
+          <div class="tool-name">PDF Compressor</div>
+          <div class="tool-desc">
+            Lossless and lossy compression modes. Reduce file sizes by up to 80% while maintaining
+            quality. Smart image downsampling with JPEG re-encoding.
+          </div>
+        </div>
+        <div class="tool-link" style="color:var(--text-muted);">
+          Coming Soon
+        </div>
+      </div>
+
+      <!-- PDF Merger -->
+      <div class="tool-card reveal reveal-delay-2" id="card-pdf-merger" style="opacity:0.6;cursor:not-allowed;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="tool-icon-wrap tool-icon-pur">🔗</div>
+          <span class="chip-soon">COMING SOON</span>
+        </div>
+        <div>
+          <div class="tool-name">PDF Merger & Splitter</div>
+          <div class="tool-desc">
+            Merge multiple PDFs into one, or split a PDF into individual pages or custom
+            page ranges. Drag to reorder before merging.
+          </div>
+        </div>
+        <div class="tool-link" style="color:var(--text-muted);">
+          Coming Soon
+        </div>
+      </div>
+
+      <!-- Metadata Scrubber -->
+      <div class="tool-card reveal reveal-delay-3" id="card-metadata-scrubber" style="opacity:0.6;cursor:not-allowed;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="tool-icon-wrap" style="background:rgba(251,113,133,0.1);border:1px solid rgba(251,113,133,0.2);">🕵️</div>
+          <span class="chip-soon">COMING SOON</span>
+        </div>
+        <div>
+          <div class="tool-name">Metadata Scrubber</div>
+          <div class="tool-desc">
+            Strip author name, creation date, GPS data, and all XMP metadata from PDFs.
+            Forensic-grade privacy cleaning. Leave zero fingerprints.
+          </div>
+        </div>
+        <div class="tool-link" style="color:var(--text-muted);">
+          Coming Soon
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ FEATURES ═════════════════════════════ -->
+<section class="features-section" id="features">
+  <div class="section">
+    <div class="section-label reveal">// TECHNICAL EDGE</div>
+    <h2 class="reveal" style="font-size:clamp(1.6rem,3vw,2.4rem);font-weight:900;margin-bottom:48px;">
+      Engineered different.<br />
+      <span class="grad-text">Not another online tool.</span>
+    </h2>
+
+    <div class="feature-grid">
+      <div class="feature-card reveal">
+        <span class="feature-icon">⚡</span>
+        <div class="feature-title">Zero Rasterization</div>
+        <div class="feature-desc">
+          We operate directly on PDF content streams — never convert pages to images.
+          Your vector graphics, fonts, and text searchability are untouched. DPI: intact.
+        </div>
+      </div>
+
+      <div class="feature-card reveal reveal-delay-1">
+        <span class="feature-icon">🔒</span>
+        <div class="feature-title">100% Local Processing</div>
+        <div class="feature-desc">
+          Your PDF never leaves your device. No S3 buckets, no temporary cloud storage.
+          Files are processed entirely in your browser's memory using WebAssembly & JS.
+        </div>
+      </div>
+
+      <div class="feature-card reveal reveal-delay-2">
+        <span class="feature-icon">🧠</span>
+        <div class="feature-title">Gemini AI — Your Key, Your Control</div>
+        <div class="feature-desc">
+          When auto-detection needs help, Gemini 3.5 Flash or 3.1 Pro steps in.
+          Your API key is stored only in session memory — never logged, never persisted.
+        </div>
+      </div>
+
+      <div class="feature-card reveal reveal-delay-3">
+        <span class="feature-icon">🐘</span>
+        <div class="feature-title">Unlimited File Size</div>
+        <div class="feature-desc">
+          Processing 200 MB PDFs? No problem. We use Web Workers and streaming chunked
+          reads to process massive files without freezing your browser tab.
+        </div>
+      </div>
+
+      <div class="feature-card reveal">
+        <span class="feature-icon">🎯</span>
+        <div class="feature-title">Flawless Native Purge</div>
+        <div class="feature-desc">
+          Phase 2 directly deletes Form XObjects, transparency groups, and text Tj/TJ operators
+          at the PDF object level. No wrappers. No hacks. Pure byte surgery.
+        </div>
+      </div>
+
+      <div class="feature-card reveal reveal-delay-1">
+        <span class="feature-icon">🔄</span>
+        <div class="feature-title">5-Phase Fallback Engine</div>
+        <div class="feature-desc">
+          Auto-detect → Native remove → Hint UI → Gemini AI identify → Targeted purge.
+          Every scenario covered, with graceful fallbacks at each step.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ HOW IT WORKS ═════════════════════════ -->
+<section style="background:var(--bg-1);border-top:1px solid var(--border);border-bottom:1px solid var(--border);" id="how">
+  <div class="section">
+    <div class="section-label reveal">// HOW IT WORKS</div>
+    <h2 class="reveal" style="font-size:clamp(1.6rem,3vw,2.4rem);font-weight:900;margin-bottom:48px;">
+      Five phases. One perfect output.
+    </h2>
+
+    <div class="hiw-steps">
+      <div class="hiw-step reveal">
+        <div class="hiw-icon">🔍</div>
+        <div class="hiw-title">Phase 1 — Auto-Detection</div>
+        <div class="hiw-desc">
+          pdf-lib parses every content stream, identifies Form XObjects, transparency layers,
+          and repeated text stamps across all pages.
+        </div>
+      </div>
+      <div class="hiw-step reveal reveal-delay-1">
+        <div class="hiw-icon">🗑️</div>
+        <div class="hiw-title">Phase 2 — Native Removal</div>
+        <div class="hiw-desc">
+          Detected watermark objects are deleted natively from the PDF structure.
+          No images. No re-encoding. Vectors and fonts stay 100% intact.
+        </div>
+      </div>
+      <div class="hiw-step reveal reveal-delay-2">
+        <div class="hiw-icon">💬</div>
+        <div class="hiw-title">Phase 3 — Hint UI</div>
+        <div class="hiw-desc">
+          If auto-detection draws a blank, a clean input panel slides in. You type a hint
+          like "DRAFT" or "Confidential" and we search specifically for it.
+        </div>
+      </div>
+      <div class="hiw-step reveal reveal-delay-3">
+        <div class="hiw-icon">🤖</div>
+        <div class="hiw-title">Phase 4 — Gemini AI Assist</div>
+        <div class="hiw-desc">
+          Page text is extracted with pdf.js and sent to Gemini 3.5 Flash via your own
+          API key. Gemini returns the exact watermark string. Your key never leaves JS memory.
+        </div>
+      </div>
+      <div class="hiw-step reveal reveal-delay-4">
+        <div class="hiw-icon">📥</div>
+        <div class="hiw-title">Phase 5 — Export</div>
+        <div class="hiw-desc">
+          The Gemini-identified string is matched across all pages and surgically removed.
+          The clean PDF is assembled and immediately downloaded — never stored.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ FAQ ═══════════════════════════════════ -->
+<section id="faq">
+  <div class="section" style="max-width:800px;">
+    <div class="section-label reveal">// FAQ</div>
+    <h2 class="reveal" style="font-size:clamp(1.6rem,3vw,2.4rem);font-weight:900;margin-bottom:40px;">
+      Straight answers. <span class="grad-text">No fluff.</span>
+    </h2>
+
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="faq-item reveal">
+        <div class="faq-q">
+          Does my PDF get uploaded anywhere?
+          <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="faq-a">
+          Absolutely not. DocPurge AI runs entirely in your browser. The PDF is loaded into
+          browser memory (ArrayBuffer), processed with pdf-lib and pdf.js, and the output is
+          downloaded directly from that memory. Zero network requests are made for your file.
+          The only external call is the optional Gemini API — and that only sends extracted
+          text (not the raw PDF), using your own key.
+        </div>
+      </div>
+
+      <div class="faq-item reveal reveal-delay-1">
+        <div class="faq-q">
+          What's the maximum file size?
+          <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="faq-a">
+          There is no enforced size limit. We've designed the engine to handle large PDFs
+          (200MB+) using Web Workers to keep processing off the main thread. Performance will
+          depend on your device's RAM and CPU — modern machines handle 200MB PDFs comfortably.
+          We recommend Chrome or Edge for best performance on very large files.
+        </div>
+      </div>
+
+      <div class="faq-item reveal reveal-delay-2">
+        <div class="faq-q">
+          Will removing a watermark damage the PDF's text or images?
+          <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="faq-a">
+          No. DocPurge AI never converts pages to raster images — that would destroy text
+          searchability and blow up file size. We operate directly on PDF content stream
+          operators (Tj, TJ, Do), deleting only the watermark objects while leaving all other
+          content untouched. DPI, vector sharpness, and font embedding are preserved exactly.
+        </div>
+      </div>
+
+      <div class="faq-item reveal reveal-delay-3">
+        <div class="faq-q">
+          Is my Gemini API Key safe?
+          <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="faq-a">
+          Yes. Your key is stored in a JavaScript variable within the current browser session only —
+          it is never written to localStorage, IndexedDB, cookies, or any external server. When you
+          close or refresh the tab, the key is gone. The Gemini API call goes directly from your
+          browser to Google's servers, bypassing DocPurge AI's infrastructure entirely (which doesn't exist).
+        </div>
+      </div>
+
+      <div class="faq-item reveal">
+        <div class="faq-q">
+          What types of watermarks can it remove?
+          <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="faq-a">
+          Phase 1 targets: PDF Form XObjects used as overlays, text stamps with transparency
+          (common in Adobe-stamped PDFs), repeated text patterns across pages (e.g., "DRAFT",
+          "CONFIDENTIAL"), and image watermarks embedded as separate XObjects. Complex watermarks
+          baked directly into the content stream may require Gemini AI Assist (Phase 4).
+        </div>
+      </div>
+
+      <div class="faq-item reveal reveal-delay-1">
+        <div class="faq-q">
+          Which Gemini models are available?
+          <svg class="faq-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="faq-a">
+          We support the current 2026 Gemini lineup: Gemini 3.5 Flash (fastest, recommended for
+          most watermarks), Gemini 3.1 Pro (most accurate, best for complex/obfuscated watermarks),
+          and Gemini 3.1 Flash-Lite (cheapest, good for simple text hints). You can select your
+          preferred model in the tool interface.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ FOOTER ═══════════════════════════════ -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <div class="logo-link" style="margin-bottom:8px;">
+        <img src="../assets/img/logo.png" alt="" class="logo-img" style="width:28px;height:28px;" />
+        <span class="logo-name" style="font-size:1rem;">DocPurge AI</span>
+      </div>
+      <div class="footer-copy">© 2026 Jigar Corp · Built by Arvind · All processing is local.</div>
+    </div>
+    <div class="footer-links">
+      <a href="../watermark-purge/watermark.html" class="footer-link">Watermark Purge</a>
+      <a href="#faq"   class="footer-link">FAQ</a>
+      <a href="#tools" class="footer-link">All Tools</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../assets/js/core-ui.js"></script>
+</body>
+</html>

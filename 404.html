@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>404 — DocPurge AI</title>
+  <link rel="icon" type="image/png" href="/assets/img/logo.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;900&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet" />
+  <style>
+    :root { --green: #00ff88; --blue: #00c3ff; --bg: #080b14; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: #e8edf5;
+      font-family: 'Inter', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      flex-direction: column;
+      gap: 24px;
+      text-align: center;
+      padding: 24px;
+    }
+    .code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 6rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--green), var(--blue));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1;
+    }
+    h1 { font-size: 1.4rem; font-weight: 700; }
+    p  { color: rgba(232,237,245,0.5); font-size: 0.9rem; }
+    a  {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-top: 8px; padding: 12px 28px;
+      background: linear-gradient(135deg, var(--green), #00cc6a);
+      color: #080b14; border-radius: 8px;
+      font-weight: 700; font-size: 0.9rem; text-decoration: none;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    a:hover { transform: translateY(-2px); box-shadow: 0 0 30px rgba(0,255,136,0.4); }
+  </style>
+</head>
+<body>
+  <div class="code">404</div>
+  <h1>Page not found</h1>
+  <p>This URL doesn't exist in the DocPurge AI suite.</p>
+  <a href="/home/home.html">← Back to Home</a>
+  <script>
+    // GitHub Pages SPA redirect trick — redirect to home after 3s
+    setTimeout(() => { window.location.href = '/home/home.html'; }, 3000);
+  </script>
+</body>
+</html>

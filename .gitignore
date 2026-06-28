@@ -1,0 +1,18 @@
+# Node modules (test suite only)
+test/node_modules/
+test/output/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
