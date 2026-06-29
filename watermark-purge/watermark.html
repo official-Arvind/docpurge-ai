@@ -425,6 +425,41 @@
           <button class="btn-remove-file" id="btn-remove-file" title="Remove file" aria-label="Remove file">✕</button>
         </div>
 
+        <!-- Target Watermarks Tag Input -->
+        <div id="target-watermarks-section" style="margin-top: 10px;">
+          <label class="field-label">Target Watermarks (Optional)</label>
+          <div class="chips-container-wrap" id="chips-container-wrap" style="
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            min-height: 48px;
+            align-items: center;
+            margin-bottom: 6px;
+          ">
+            <div id="chips-list" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+            <input
+              type="text"
+              id="watermark-input"
+              style="
+                flex: 1;
+                min-width: 150px;
+                background: transparent;
+                border: none;
+                outline: none;
+                color: #fff;
+                font-size: 0.85rem;
+              "
+              placeholder="Type watermark and press Enter..."
+              autocomplete="off"
+            />
+          </div>
+          <div class="field-hint">Specify exact watermark strings. Press Enter after each. Left empty for auto-detection.</div>
+        </div>
+
         <!-- Purge button -->
         <button class="btn btn-primary" id="btn-start-purge" disabled style="width:100%;justify-content:center;padding:16px;font-size:1rem;opacity:0.4;cursor:not-allowed;">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
@@ -623,6 +658,11 @@
             <div class="field-hint">Text/images at or below this opacity will be treated as watermarks.</div>
           </div>
 
+          <label class="checkbox-wrap" style="color: var(--green); font-weight: bold; display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" id="chk-use-cv-engine" />
+            🔥 Use CV Image Engine (for Scans/Handwritten notes)
+          </label>
+
           <label class="checkbox-wrap">
             <input type="checkbox" id="chk-remove-xobj" checked />
             Remove Form XObjects (overlay watermarks)
@@ -637,6 +677,21 @@
             <input type="checkbox" id="chk-preserve-meta" />
             Preserve original PDF metadata
           </label>
+
+          <div style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 16px;">
+            <label class="field-label" for="sidebar-gemini-key">Gemini API Key</label>
+            <div class="api-key-wrap">
+              <input
+                type="password"
+                id="sidebar-gemini-key"
+                class="input-field input-mono"
+                placeholder="AIza..."
+                autocomplete="off"
+              />
+              <button class="btn-toggle-key" id="btn-toggle-sidebar-key" type="button" aria-label="Toggle key visibility">👁</button>
+            </div>
+            <div class="field-hint">Used if auto-detection fails and Gemini needs to find the watermark.</div>
+          </div>
         </div>
       </div>
     </div>

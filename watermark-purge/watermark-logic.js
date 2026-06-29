@@ -40,6 +40,7 @@ const state = {
   candidates:      [],     // detected watermark objects
   purgedBytes:     null,   // Uint8Array of output PDF
   currentPhase:    0,
+  useCVEngine:     false,
 };
 
 // ─── UI ELEMENT REFS ─────────────────────────────────────────────────────
@@ -86,6 +87,7 @@ const ui = {
   chkRemoveXobj:    $('chk-remove-xobj'),
   chkRemoveOCG:     $('chk-remove-ocg'),
   chkPreserveMeta:  $('chk-preserve-meta'),
+  chkUseCVEngine:   $('chk-use-cv-engine'),
 };
 
 // ─── LOGGER ──────────────────────────────────────────────────────────────
@@ -226,6 +228,7 @@ ui.opacityRange.addEventListener('input', () => {
 ui.chkRemoveXobj.addEventListener('change', () => { state.removeXObj = ui.chkRemoveXobj.checked; });
 ui.chkRemoveOCG.addEventListener('change',  () => { state.removeOCG  = ui.chkRemoveOCG.checked; });
 ui.chkPreserveMeta.addEventListener('change', () => { state.preserveMeta = ui.chkPreserveMeta.checked; });
+ui.chkUseCVEngine.addEventListener('change', () => { state.useCVEngine = ui.chkUseCVEngine.checked; });
 ui.geminiModelSel.addEventListener('change', () => { state.geminiModel = ui.geminiModelSel.value; });
 
 // Gemini key toggle
@@ -260,45 +263,88 @@ ui.btnStartPurge.addEventListener('click', async () => {
   setProgress(0);
 
   try {
-    // ══════════ PHASE 1 ══════════════════════════════════════════════════
-    setPhaseState(1, 'active');
-    log('══ Phase 1: Auto-Detection ══', 'blue');
-    await sleep(200);
-
-    const detected = await phase1_detect();
-    state.candidates = detected;
-    setProgress(20);
-
-    if (detected.length > 0) {
+    // If the user enabled the CV Image Engine, bypass native vector parsing
+    if (state.useCVEngine) {
+      setPhaseState(1, 'active');
+      await runCVEngine();
       setPhaseState(1, 'done');
-      log(`Phase 1 ✓ — Found ${detected.length} watermark candidate(s).`, 'green');
-      renderCandidates(detected);
-
-      // ══════════ PHASE 2 ════════════════════════════════════════════════
-      setPhaseState(2, 'active');
-      log('══ Phase 2: Native Removal ══', 'blue');
-      await sleep(200);
-
-      const removedCount = await phase2_remove(detected);
-      setProgress(70);
-      setPhaseState(2, 'done');
-      log(`Phase 2 ✓ — Removed ${removedCount} watermark object(s).`, 'green');
+      setPhaseState(2, 'skip');
       setPhaseState(3, 'skip');
       setPhaseState(4, 'skip');
-
-      // ══════════ PHASE 5 ════════════════════════════════════════════════
       await doPhase5();
+      return;
+    }
 
+    // Check if user entered exact watermarks first
+    if (watermarkList.length > 0) {
+      setPhaseState(1, 'skip');
+      setPhaseState(2, 'active');
+      log('══ Phase 2: Purging User-Defined Watermarks ══', 'blue');
+      await sleep(200);
+
+      let totalRemoved = 0;
+      for (const wm of watermarkList) {
+        log(`Searching for user-defined watermark: "${wm}"…`);
+        const removed = await searchAndRemoveByText(wm);
+        totalRemoved += removed;
+      }
+
+      if (totalRemoved > 0) {
+        setProgress(70);
+        setPhaseState(2, 'done');
+        log(`Phase 2 ✓ — Removed ${totalRemoved} instance(s) of user-defined watermark(s).`, 'green');
+        setPhaseState(3, 'skip');
+        setPhaseState(4, 'skip');
+
+        // ══════════ PHASE 5 ════════════════════════════════════════════════
+        await doPhase5();
+      } else {
+        log('⚠ User-defined watermark(s) not found in PDF streams.', 'warn');
+        setPhaseState(2, 'error');
+        setProgress(30);
+
+        log('Target watermark(s) not found. Consulting Gemini AI to identify the watermark…', 'warn');
+        await triggerGeminiFlow();
+      }
     } else {
-      setPhaseState(1, 'done');
-      log('Phase 1 — No obvious watermarks auto-detected. Activating Phase 3.', 'warn');
-      setPhaseState(2, 'skip');
-      setProgress(30);
+      // ══════════ PHASE 1 ══════════════════════════════════════════════════
+      setPhaseState(1, 'active');
+      log('══ Phase 1: Auto-Detection ══', 'blue');
+      await sleep(200);
 
-      // ══════════ PHASE 3 ════════════════════════════════════════════════
-      setPhaseState(3, 'active');
-      log('══ Phase 3: Hint Mode ══', 'warn');
-      showHintPanel();
+      const detected = await phase1_detect();
+      state.candidates = detected;
+      setProgress(20);
+
+      if (detected.length > 0) {
+        setPhaseState(1, 'done');
+        log(`Phase 1 ✓ — Found ${detected.length} watermark candidate(s).`, 'green');
+        renderCandidates(detected);
+
+        // ══════════ PHASE 2 ════════════════════════════════════════════════
+        setPhaseState(2, 'active');
+        log('══ Phase 2: Native Removal ══', 'blue');
+        await sleep(200);
+
+        const removedCount = await phase2_remove(detected);
+        setProgress(70);
+        setPhaseState(2, 'done');
+        log(`Phase 2 ✓ — Removed ${removedCount} watermark object(s).`, 'green');
+        setPhaseState(3, 'skip');
+        setPhaseState(4, 'skip');
+
+        // ══════════ PHASE 5 ════════════════════════════════════════════════
+        await doPhase5();
+
+      } else {
+        setPhaseState(1, 'done');
+        log('Phase 1 — No obvious watermarks auto-detected.', 'warn');
+        setPhaseState(2, 'skip');
+        setProgress(30);
+
+        log('Activating Gemini AI Assist to detect watermarks…', 'warn');
+        await triggerGeminiFlow();
+      }
     }
 
   } catch (err) {
@@ -639,6 +685,66 @@ function removeOCGLayer(ocgRef, doc) {
     }
   } catch (e) {
     log('  OCG removal error: ' + e.message, 'dim');
+  }
+}
+
+// ─── AUTO-TRIGGER GEMINI ASSIST ──────────────────────────────────────────
+async function triggerGeminiFlow() {
+  setPhaseState(3, 'skip');
+  setPhaseState(4, 'active');
+
+  const key = state.geminiKey || ui.geminiKeyInput.value.trim() || ($('sidebar-gemini-key') ? $('sidebar-gemini-key').value.trim() : '');
+  if (!key) {
+    log('🔑 Gemini API Key required. Please enter it in the settings sidebar or prompt panel to continue.', 'warn');
+    showGeminiPanel();
+    return;
+  }
+
+  state.geminiKey = key;
+  showGeminiPanel();
+
+  // If the user typed a target watermark but it wasn't found, use it as a hint for Gemini.
+  // Otherwise, default to 'watermark'.
+  const hint = ui.geminiHintAI.value.trim() || watermarkList.join(', ') || 'watermark';
+  ui.geminiHintAI.value = hint;
+
+  log(`Querying ${state.geminiModel} with hint: "${hint}"…`, 'blue');
+  ui.btnRunGemini.disabled = true;
+  ui.btnRunGemini.textContent = '⏳ Querying Gemini…';
+
+  try {
+    const pageTexts = await extractPageTextsWithHint(hint);
+    log(`  Extracted text from ${pageTexts.length} page(s) for context.`, 'dim');
+
+    const watermarkStr = await queryGemini(key, state.geminiModel, hint, pageTexts);
+
+    if (!watermarkStr || watermarkStr.length < 1) {
+      throw new Error('Gemini returned an empty response.');
+    }
+
+    log(`Phase 4 ✓ — Gemini identified: "${watermarkStr}"`, 'green');
+    setPhaseState(4, 'done');
+    setProgress(75);
+
+    // Show result
+    ui.geminiResult.style.display = 'block';
+    ui.geminiResultBox.textContent = watermarkStr;
+    state._geminiWatermarkStr = watermarkStr;
+
+    // Automatically purge the detected string
+    log(`Auto Purging Gemini identified watermark: "${watermarkStr}"…`, 'blue');
+    const count = await searchAndRemoveByText(watermarkStr);
+    setProgress(85);
+    log(`  Removed ${count} instance(s) of "${watermarkStr}".`, 'green');
+    await doPhase5();
+
+  } catch (e) {
+    setPhaseState(4, 'error');
+    log('Phase 4 error: ' + e.message, 'err');
+    log('Check your API key and model availability.', 'warn');
+  } finally {
+    ui.btnRunGemini.disabled = false;
+    ui.btnRunGemini.textContent = '🚀 Identify Watermark with Gemini';
   }
 }
 
@@ -1047,6 +1153,13 @@ function resetAll() {
   ui.overallStatus.textContent = 'IDLE';
   ui.overallStatus.style.color = '';
   ui.candidatesSection.style.display = 'none';
+  
+  // Clear watermark tags list
+  watermarkList.length = 0;
+  renderChips();
+
+  ui.chkUseCVEngine.checked = false;
+  state.useCVEngine = false;
 
   for (let i = 1; i <= 5; i++) setPhaseState(i, '');
 
@@ -1064,8 +1177,441 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + s[i];
 }
 
+// ─── TARGET WATERMARK TAG INPUT CHIPS ─────────────────────────────────────
+const watermarkList = [];
+
+const wmInput = $('watermark-input');
+const chipsList = $('chips-list');
+
+if (wmInput && chipsList) {
+  wmInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = wmInput.value.trim();
+      if (val && !watermarkList.includes(val)) {
+        watermarkList.push(val);
+        renderChips();
+        wmInput.value = '';
+      }
+    }
+  });
+
+  chipsList.addEventListener('click', (e) => {
+    if (e.target.classList.contains('delete-chip')) {
+      const idx = parseInt(e.target.getAttribute('data-idx'));
+      watermarkList.splice(idx, 1);
+      renderChips();
+    }
+  });
+}
+
+function renderChips() {
+  if (!chipsList) return;
+  chipsList.innerHTML = '';
+  watermarkList.forEach((wm, idx) => {
+    const chip = document.createElement('div');
+    chip.style.cssText = `
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0, 195, 255, 0.1);
+      border: 1px solid rgba(0, 195, 255, 0.25);
+      color: var(--blue);
+      padding: 4px 10px;
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-family: var(--mono);
+    `;
+    chip.innerHTML = `
+      <span>${escHtml(wm)}</span>
+      <span class="delete-chip" style="cursor:pointer;opacity:0.6;font-weight:bold;margin-left:4px;" data-idx="${idx}">✕</span>
+    `;
+    chipsList.appendChild(chip);
+  });
+  
+  if (watermarkList.length > 0) {
+    wmInput.placeholder = 'Add more...';
+  } else {
+    wmInput.placeholder = 'Type watermark and press Enter...';
+  }
+}
+
+// API Key Sync
+const sidebarKeyInput = $('sidebar-gemini-key');
+const mainKeyInput = ui.geminiKeyInput;
+
+if (sidebarKeyInput && mainKeyInput) {
+  sidebarKeyInput.addEventListener('input', () => {
+    mainKeyInput.value = sidebarKeyInput.value;
+    state.geminiKey = sidebarKeyInput.value.trim();
+  });
+  mainKeyInput.addEventListener('input', () => {
+    sidebarKeyInput.value = mainKeyInput.value;
+    state.geminiKey = mainKeyInput.value.trim();
+  });
+
+  $('btn-toggle-sidebar-key').addEventListener('click', () => {
+    sidebarKeyInput.type = sidebarKeyInput.type === 'password' ? 'text' : 'password';
+    $('btn-toggle-sidebar-key').textContent = sidebarKeyInput.type === 'password' ? '👁' : '🙈';
+  });
+}
+
 // ─── INIT LOG ─────────────────────────────────────────────────────────────
 log('DocPurge AI Engine v1.0 — Ready', 'green');
 log('Supported models: Gemini 3.5 Flash, 3.1 Pro, 3.1 Flash-Lite', 'blue');
 log('No size limit. No uploads. 100% local.', 'dim');
 log('Drop a PDF above to begin.', 'dim');
+
+// ─── CV IMAGE PURGE ENGINE (Browser-Based Pixel Purging) ──────────────────
+const templates = { wc: null, jc: null, bb: null };
+
+async function runCVEngine() {
+  log('══ Running CV Image Purge Engine (Scanned PDF mode) ══', 'blue');
+  setProgress(5);
+  
+  log('Loading visual watermark templates…');
+  await loadAllTemplates();
+  setProgress(10);
+  
+  const pdfjsDoc = state.pdfjsDoc;
+  const numPages = pdfjsDoc.numPages;
+  
+  // Create a new PDF document in pdf-lib
+  const outDoc = await PDFLib.PDFDocument.create();
+  
+  for (let pi = 0; pi < numPages; pi++) {
+    log(`Processing Page ${pi + 1}/${numPages}…`);
+    
+    // Render page to canvas using pdf.js
+    const page = await pdfjsDoc.getPage(pi + 1);
+    const viewport = page.getViewport({ scale: 1.5 }); // 1.5x scale yields high quality (approx 150 DPI)
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    
+    // Run template-matching and pixel-level purger on the canvas!
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const cleanedData = purgeCanvasPixels(imgData);
+    ctx.putImageData(cleanedData, 0, 0);
+    
+    // Convert canvas to JPEG bytes
+    const jpegUrl = canvas.toDataURL('image/jpeg', 0.90);
+    const jpegBytes = await fetch(jpegUrl).then(res => res.arrayBuffer());
+    
+    // Embed into the output PDF
+    const embedImage = await outDoc.embedJpg(jpegBytes);
+    const newPage = outDoc.addPage([viewport.width, viewport.height]);
+    newPage.drawImage(embedImage, {
+      x: 0,
+      y: 0,
+      width: viewport.width,
+      height: viewport.height
+    });
+    
+    setProgress(10 + Math.round(((pi + 1) / numPages) * 75));
+  }
+  
+  state.pdfLibDoc = outDoc;
+  log('✓ CV Image Purge complete across all pages.', 'green');
+}
+
+function purgeCanvasPixels(imgData) {
+  const w = imgData.width;
+  const h = imgData.height;
+  const pixels = imgData.data;
+  
+  // 1. Compute red mask and blue mask for the page
+  const redMask = new Uint8Array(w * h);
+  const blueMask = new Uint8Array(w * h);
+  
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i];
+    const g = pixels[i+1];
+    const b = pixels[i+2];
+    
+    const hsv = rgbToHsv(r, g, b);
+    
+    // Red mask
+    if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
+      if (hsv[1] >= 40 && hsv[2] >= 40) {
+        redMask[i / 4] = 1;
+      }
+    }
+    
+    // Blue mask
+    if (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80) {
+      blueMask[i / 4] = 1;
+    }
+  }
+  
+  // 2. Match WC (main watermark) - top 35%, right 45%
+  const searchHWc = Math.round(h * 0.35);
+  const searchWWc = Math.round(w * 0.45);
+  const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - searchWWc, 0, searchWWc, searchHWc);
+  
+  if (resWc.score >= 0.45) {
+    // Sample background
+    const bg = sampleCanvasBg(pixels, w, h, resWc.x, resWc.y, resWc.tw, resWc.th, redMask);
+    // Erase matching points with dilation (5x5 square)
+    erasePoints(pixels, w, h, resWc.x, resWc.y, resWc.points, bg);
+  }
+  
+  // 3. Match JC (J* stamp) - top 55%, right 45%
+  const searchHJc = Math.round(h * 0.55);
+  const searchWJc = Math.round(w * 0.45);
+  const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - searchWJc, 0, searchWJc, searchHJc);
+  
+  if (resJc.score >= 0.45) {
+    const bg = sampleCanvasBg(pixels, w, h, resJc.x, resJc.y, resJc.tw, resJc.th, redMask);
+    erasePoints(pixels, w, h, resJc.x, resJc.y, resJc.points, bg);
+  }
+  
+  // 4. Match BB (blue banner) - bottom 15%
+  const searchHBb = Math.round(h * 0.15);
+  const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - searchHBb, w, searchHBb);
+  
+  if (resBb.score >= 0.45) {
+    const by = resBb.y;
+    // Wipe main banner from by - 3 to bottom
+    const scale = w / 1462.0;
+    const curveWidth = Math.round(120 * scale);
+    
+    for (let y = by - 3; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        pixels[idx] = 255;
+        pixels[idx+1] = 255;
+        pixels[idx+2] = 255;
+      }
+    }
+    // Wipe left curve from by - 45 to bottom
+    const curveYStart = Math.max(0, by - 45);
+    for (let y = curveYStart; y < by - 3; y++) {
+      for (let x = 0; x < curveWidth; x++) {
+        const idx = (y * w + x) * 4;
+        pixels[idx] = 255;
+        pixels[idx+1] = 255;
+        pixels[idx+2] = 255;
+      }
+    }
+  }
+  
+  return imgData;
+}
+
+function matchTemplateSparse(targetMask, targetW, targetH, template, searchX, searchY, searchW, searchH) {
+  const scale = targetW / 1462.0;
+  
+  // Scale the template points
+  const scaledPoints = template.points.map(pt => ({
+    x: Math.round(pt.x * scale),
+    y: Math.round(pt.y * scale)
+  }));
+  const tw = Math.round(template.width * scale);
+  const th = Math.round(template.height * scale);
+  
+  // Keep only unique scaled points to avoid double counting
+  const uniquePoints = [];
+  const seen = new Set();
+  scaledPoints.forEach(pt => {
+    const key = `${pt.x},${pt.y}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniquePoints.push(pt);
+    }
+  });
+  
+  if (uniquePoints.length === 0) return { score: 0 };
+  
+  let bestScore = 0;
+  let bestX = 0;
+  let bestY = 0;
+  
+  // Slide window
+  const maxX = searchX + searchW - tw;
+  const maxY = searchY + searchH - th;
+  
+  for (let y = searchY; y <= maxY; y += 2) { // step by 2 for speed
+    for (let x = searchX; x <= maxX; x += 2) {
+      let matchCount = 0;
+      for (let i = 0; i < uniquePoints.length; i++) {
+        const pt = uniquePoints[i];
+        const tx = x + pt.x;
+        const ty = y + pt.y;
+        if (tx >= 0 && tx < targetW && ty >= 0 && ty < targetH) {
+          if (targetMask[ty * targetW + tx] === 1) {
+            matchCount++;
+          }
+        }
+      }
+      const score = matchCount / uniquePoints.length;
+      if (score > bestScore) {
+        bestScore = score;
+        bestX = x;
+        bestY = y;
+      }
+    }
+  }
+  
+  // Local fine-tuning scan (step by 1)
+  if (bestScore >= 0.35) {
+    let fineScore = bestScore;
+    let fineX = bestX;
+    let fineY = bestY;
+    
+    const fyStart = Math.max(searchY, bestY - 2);
+    const fyEnd = Math.min(maxY, bestY + 2);
+    const fxStart = Math.max(searchX, bestX - 2);
+    const fxEnd = Math.min(maxX, bestX + 2);
+    
+    for (let y = fyStart; y <= fyEnd; y++) {
+      for (let x = fxStart; x <= fxEnd; x++) {
+        let matchCount = 0;
+        for (let i = 0; i < uniquePoints.length; i++) {
+          const pt = uniquePoints[i];
+          const tx = x + pt.x;
+          const ty = y + pt.y;
+          if (targetMask[ty * targetW + tx] === 1) matchCount++;
+        }
+        const score = matchCount / uniquePoints.length;
+        if (score > fineScore) {
+          fineScore = score;
+          fineX = x;
+          fineY = y;
+        }
+      }
+    }
+    return { score: fineScore, x: fineX, y: fineY, tw, th, points: uniquePoints };
+  }
+  
+  return { score: bestScore, x: bestX, y: bestY, tw, th, points: uniquePoints };
+}
+
+function sampleCanvasBg(pixels, w, h, bx, by, bw, bh, mask) {
+  let sumR = 0, sumG = 0, sumB = 0, count = 0;
+  for (let y = by; y < by + bh; y++) {
+    for (let x = bx; x < bx + bw; x++) {
+      if (x >= 0 && x < w && y >= 0 && y < h) {
+        const idx = y * w + x;
+        if (mask[idx] === 0) {
+          const pIdx = idx * 4;
+          sumR += pixels[pIdx];
+          sumG += pixels[pIdx+1];
+          sumB += pixels[pIdx+2];
+          count++;
+        }
+      }
+    }
+  }
+  if (count > 0) {
+    return [Math.round(sumR / count), Math.round(sumG / count), Math.round(sumB / count)];
+  }
+  return [255, 255, 255];
+}
+
+function erasePoints(pixels, w, h, bx, by, points, bg) {
+  points.forEach(pt => {
+    const px = bx + pt.x;
+    const py = by + pt.y;
+    
+    // Paint a 5x5 square (dilation = 2px radius)
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const tx = px + dx;
+        const ty = py + dy;
+        if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
+          const idx = (ty * w + tx) * 4;
+          pixels[idx] = bg[0];
+          pixels[idx+1] = bg[1];
+          pixels[idx+2] = bg[2];
+        }
+      }
+    }
+  });
+}
+
+function rgbToHsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, v = max;
+  const d = max - min;
+  s = max === 0 ? 0 : d / max;
+  if (max === min) {
+    h = 0; // achromatic
+  } else {
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
+  }
+  return [Math.round(h * 180), Math.round(s * 255), Math.round(v * 255)];
+}
+
+async function loadAllTemplates() {
+  if (templates.wc && templates.jc && templates.bb) return; // already loaded
+  templates.wc = await getTemplateMask('../assets/img/template_wc.png', 'red');
+  templates.jc = await getTemplateMask('../assets/img/template_jc.png', 'red');
+  templates.bb = await getTemplateMask('../assets/img/template_bb.png', 'blue');
+}
+
+async function getTemplateMask(src, colorType) {
+  const img = await loadTemplateImage(src);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0);
+  const imgData = ctx.getImageData(0, 0, img.width, img.height);
+  const pixels = imgData.data;
+  
+  const mask = new Uint8Array(img.width * img.height);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i];
+    const g = pixels[i+1];
+    const b = pixels[i+2];
+    
+    let active = 0;
+    if (colorType === 'red') {
+      const hsv = rgbToHsv(r, g, b);
+      if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
+        if (hsv[1] >= 40 && hsv[2] >= 40) active = 1;
+      }
+    } else if (colorType === 'blue') {
+      const hsv = rgbToHsv(r, g, b);
+      if (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80) active = 1;
+    }
+    mask[i / 4] = active;
+  }
+  
+  const activePoints = [];
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      if (mask[y * img.width + x] === 1) {
+        activePoints.push({ x, y });
+      }
+    }
+  }
+  
+  return {
+    width: img.width,
+    height: img.height,
+    points: activePoints,
+    mask: mask
+  };
+}
+
+async function loadTemplateImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = src;
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+  });
+}
