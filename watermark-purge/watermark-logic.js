@@ -226,15 +226,21 @@ ui.btnClearLog.addEventListener('click', () => { ui.logBody.innerHTML = ''; });
  * < 10 items → very likely scanned (image-only) PDF.
  */
 async function detectPDFType() {
-  let totalItems = 0;
   const pagesToCheck = Math.min(state.pdfjsDoc.numPages, 5);
+  const promises = [];
   for (let i = 1; i <= pagesToCheck; i++) {
-    try {
-      const page = await state.pdfjsDoc.getPage(i);
-      const content = await page.getTextContent();
-      totalItems += content.items.filter(it => it.str && it.str.trim().length > 0).length;
-    } catch (_) {}
+    promises.push((async (pNum) => {
+      try {
+        const page = await state.pdfjsDoc.getPage(pNum);
+        const content = await page.getTextContent();
+        return content.items.filter(it => it.str && it.str.trim().length > 0).length;
+      } catch (_) {
+        return 0;
+      }
+    })(i));
   }
+  const counts = await Promise.all(promises);
+  const totalItems = counts.reduce((a, b) => a + b, 0);
   return totalItems < 10 ? 'scanned' : 'vector';
 }
 
@@ -244,20 +250,23 @@ async function detectPDFType() {
  * something raw content-stream byte scanning cannot do reliably.
  */
 async function extractAllPageText() {
-  const pageTexts = [];
   const numPages = state.pdfjsDoc.numPages;
+  const promises = [];
   for (let i = 1; i <= numPages; i++) {
-    try {
-      const page = await state.pdfjsDoc.getPage(i);
-      const content = await page.getTextContent();
-      const items = content.items.filter(it => it.str && it.str.trim());
-      const text = items.map(it => it.str).join(' ');
-      pageTexts.push({ page: i, text, items });
-    } catch (_) {
-      pageTexts.push({ page: i, text: '', items: [] });
-    }
+    promises.push((async (pNum) => {
+      try {
+        const page = await state.pdfjsDoc.getPage(pNum);
+        const content = await page.getTextContent();
+        const items = content.items.filter(it => it.str && it.str.trim());
+        const text = items.map(it => it.str).join(' ');
+        return { page: pNum, text, items };
+      } catch (_) {
+        return { page: pNum, text: '', items: [] };
+      }
+    })(i));
   }
-  return pageTexts;
+  const results = await Promise.all(promises);
+  return results.sort((a, b) => a.page - b.page);
 }
 
 /**
@@ -361,14 +370,11 @@ async function removeByCoordinates(keyword) {
   const lowerKw = keyword.toLowerCase().trim();
   if (!lowerKw) return 0;
 
-  for (let pi = 1; pi <= state.pdfjsDoc.numPages; pi++) {
+  const pageTexts = state.pageTexts || [];
+  for (const { page: pi, items } of pageTexts) {
     try {
-      const page    = await state.pdfjsDoc.getPage(pi);
-      const content = await page.getTextContent();
-      const allItems = content.items.filter(it => it.str && it.str.trim());
-
       // Match items that contain or are part of the keyword
-      const matching = allItems.filter(item => {
+      const matching = items.filter(item => {
         const s = item.str.toLowerCase();
         // Full containment OR the item is a fragment of the keyword (≥ 3 chars)
         return s.includes(lowerKw) || (lowerKw.includes(s.trim()) && s.trim().length >= 3);
@@ -719,6 +725,7 @@ ui.btnRunGemini.addEventListener('click', async () => {
 
   try {
     const pageTexts   = await extractAllPageText();
+    state.pageTexts = pageTexts;
     const watermarkStr = await queryGemini(key, pageTexts);
 
     if (!watermarkStr) throw new Error('Gemini could not identify a watermark from this PDF text.');
@@ -803,6 +810,7 @@ ui.btnStartPurge.addEventListener('click', async () => {
     // ── Vector PDF: extract all text ─────────────────────────────────────────
     log('Extracting text from all pages via pdf.js…');
     const pageTexts = await extractAllPageText();
+    state.pageTexts = pageTexts;
     const totalItems = pageTexts.reduce((s, p) => s + p.items.length, 0);
     log(`Extracted ${totalItems} text items across ${pageTexts.length} page(s).`, 'dim');
     setProgress(18);
@@ -1135,29 +1143,67 @@ async function runCVEngine() {
   const numPages = pdfjsDoc.numPages;
   const outDoc   = await PDFLib.PDFDocument.create();
 
+  // Concurrency limit of 4 keeps CPU/GPU pipelines fully saturated
+  const CONCURRENCY = 4;
+  const pageIndices = Array.from({ length: numPages }, (_, i) => i);
+  let completedCount = 0;
+  const processedPages = new Array(numPages);
+
+  async function worker(pi) {
+    try {
+      const page     = await pdfjsDoc.getPage(pi + 1);
+      const viewport = page.getViewport({ scale: 1.5 });
+
+      const canvas  = document.createElement('canvas');
+      canvas.width  = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      const imgData     = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const cleanedData = purgeCanvasPixels(imgData);
+      ctx.putImageData(cleanedData, 0, 0);
+
+      const jpegUrl   = canvas.toDataURL('image/jpeg', 0.90);
+      const jpegBytes = await fetch(jpegUrl).then(res => res.arrayBuffer());
+
+      processedPages[pi] = {
+        bytes: jpegBytes,
+        width: viewport.width,
+        height: viewport.height
+      };
+
+      completedCount++;
+      log(`  Processed page ${pi + 1}/${numPages}…`);
+      setProgress(10 + Math.round((completedCount / numPages) * 70));
+    } catch (err) {
+      log(`✗ Error processing page ${pi + 1}: ${err.message}`, 'err');
+    }
+  }
+
+  // Run concurrency pool
+  const pool = [];
+  for (let i = 0; i < Math.min(CONCURRENCY, numPages); i++) {
+    pool.push((async () => {
+      while (pageIndices.length > 0) {
+        const nextIdx = pageIndices.shift();
+        await worker(nextIdx);
+      }
+    })());
+  }
+
+  await Promise.all(pool);
+
+  // Assemble pages in correct order
+  log('Assembling final PDF document…');
   for (let pi = 0; pi < numPages; pi++) {
-    log(`Processing Page ${pi + 1}/${numPages}…`);
-    const page     = await pdfjsDoc.getPage(pi + 1);
-    const viewport = page.getViewport({ scale: 1.5 });
-
-    const canvas  = document.createElement('canvas');
-    canvas.width  = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext('2d');
-
-    await page.render({ canvasContext: ctx, viewport }).promise;
-
-    const imgData     = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const cleanedData = purgeCanvasPixels(imgData);
-    ctx.putImageData(cleanedData, 0, 0);
-
-    const jpegUrl   = canvas.toDataURL('image/jpeg', 0.90);
-    const jpegBytes = await fetch(jpegUrl).then(res => res.arrayBuffer());
-    const embedImg  = await outDoc.embedJpg(jpegBytes);
-    const newPage   = outDoc.addPage([viewport.width, viewport.height]);
-    newPage.drawImage(embedImg, { x: 0, y: 0, width: viewport.width, height: viewport.height });
-
-    setProgress(10 + Math.round(((pi + 1) / numPages) * 75));
+    const pData = processedPages[pi];
+    if (pData) {
+      const embedImg  = await outDoc.embedJpg(pData.bytes);
+      const newPage   = outDoc.addPage([pData.width, pData.height]);
+      newPage.drawImage(embedImg, { x: 0, y: 0, width: pData.width, height: pData.height });
+    }
   }
 
   state.pdfLibDoc = outDoc;
@@ -1171,6 +1217,13 @@ function purgeCanvasPixels(imgData) {
 
   for (let i = 0; i < pixels.length; i += 4) {
     const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+
+    // Pre-filtering: skip low-saturation pixels (gray background, dark text, white pages)
+    // This bypasses complex RGB-to-HSV math for 95%+ of the pixels.
+    const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    if (max - min < 15) continue;
+
     const hsv = rgbToHsv(r, g, b);
     if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
       if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
@@ -1229,9 +1282,11 @@ function matchTemplateSparse(targetMask, targetW, targetH, template, searchX, se
 
   let bestScore = 0, bestX = 0, bestY = 0;
   const maxX = searchX + searchW - tw, maxY = searchY + searchH - th;
+  const COARSE_STEP = 6;
 
-  for (let y = searchY; y <= maxY; y += 2) {
-    for (let x = searchX; x <= maxX; x += 2) {
+  // 1. Coarse search (large step for extreme speed)
+  for (let y = searchY; y <= maxY; y += COARSE_STEP) {
+    for (let x = searchX; x <= maxX; x += COARSE_STEP) {
       let mc = 0;
       for (let i = 0; i < uniquePoints.length; i++) {
         const pt = uniquePoints[i], tx = x + pt.x, ty = y + pt.y;
@@ -1242,10 +1297,16 @@ function matchTemplateSparse(targetMask, targetW, targetH, template, searchX, se
     }
   }
 
+  // 2. Fine search around the peak candidate (step of 1)
   if (bestScore >= 0.35) {
     let fS = bestScore, fX = bestX, fY = bestY;
-    for (let y = Math.max(searchY, bestY-2); y <= Math.min(maxY, bestY+2); y++) {
-      for (let x = Math.max(searchX, bestX-2); x <= Math.min(maxX, bestX+2); x++) {
+    const startY = Math.max(searchY, bestY - COARSE_STEP);
+    const endY = Math.min(maxY, bestY + COARSE_STEP);
+    const startX = Math.max(searchX, bestX - COARSE_STEP);
+    const endX = Math.min(maxX, bestX + COARSE_STEP);
+
+    for (let y = startY; y <= endY; y++) {
+      for (let x = startX; x <= endX; x++) {
         let mc = 0;
         for (let i = 0; i < uniquePoints.length; i++) {
           const pt = uniquePoints[i], tx = x + pt.x, ty = y + pt.y;
