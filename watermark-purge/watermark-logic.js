@@ -88,6 +88,8 @@ const ui = {
   btnProcessAnother: $('btn-process-another'),
   logBody:           $('tool-log-body'),
   btnClearLog:       $('btn-clear-log'),
+  btnConfirmPurge:   $('btn-confirm-purge'),
+  btnAskGeminiDetection: $('btn-ask-gemini-detection'),
 };
 
 // ─── LOGGER ───────────────────────────────────────────────────────────────────
@@ -791,123 +793,232 @@ ui.btnStartPurge.addEventListener('click', async () => {
     const pdfType = await detectPDFType();
     log(`PDF type: ${pdfType === 'scanned' ? '🖼️  Scanned Image PDF' : '📄  Vector/Text PDF'}`,
         pdfType === 'scanned' ? 'warn' : 'dim');
-    setProgress(8);
+    setProgress(10);
 
-    // ── Scanned PDF: auto-run CV Image Engine ────────────────────────────────
-    if (pdfType === 'scanned') {
+    // Step 2: Extract text for vector PDFs
+    let pageTexts = [];
+    if (pdfType === 'vector') {
+      log('Extracting text from all pages via pdf.js…');
+      pageTexts = await extractAllPageText();
+      state.pageTexts = pageTexts;
+      const totalItems = pageTexts.reduce((s, p) => s + p.items.length, 0);
+      log(`Extracted ${totalItems} text items across ${pageTexts.length} page(s).`, 'dim');
+    }
+
+    let userConfirmed = false;
+    let selectedCandidates = [];
+
+    while (!userConfirmed) {
+      let detectedKeywords = [];
+      let structCandidates = [];
+      let scannedCandidates = [];
+
+      if (pdfType === 'scanned') {
+        log('Running visual templates pre-match on Page 1…');
+        await loadAllTemplates();
+
+        // Perform a pre-match check on Page 1 to see which built-in templates match
+        const page     = await pdfjsDoc.getPage(1);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas  = document.createElement('canvas');
+        canvas.width  = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext('2d');
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const w = imgData.width, h = imgData.height, pixels = imgData.data;
+        const redMask  = new Uint8Array(w * h);
+        const blueMask = new Uint8Array(w * h);
+
+        for (let i = 0; i < pixels.length; i += 4) {
+          const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+          const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+          const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+          if (max - min < 15) continue;
+
+          const hsv = rgbToHsv(r, g, b);
+          if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
+            if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
+          }
+          if (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80) blueMask[i / 4] = 1;
+        }
+
+        const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
+        const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
+        if (resWc.score >= 0.40) {
+          scannedCandidates.push({ type: 'template', key: 'wc', label: 'Red Stamp: "(AKM SIR)# J STAR" (Scanned)' });
+        }
+
+        const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
+        const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
+        if (resJc.score >= 0.40) {
+          scannedCandidates.push({ type: 'template', key: 'jc', label: 'Red Stamp: "J*" (Scanned)' });
+        }
+
+        const sHBb = Math.round(h * 0.15);
+        const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
+        if (resBb.score >= 0.40) {
+          scannedCandidates.push({ type: 'template', key: 'bb', label: 'Blue Banner: "Referral Code: JSTARLIVE" (Scanned)' });
+        }
+      } else {
+        // Vector keywords
+        if (watermarkList.length > 0) {
+          detectedKeywords = detectWatermarkKeywords(pageTexts, watermarkList);
+        } else {
+          detectedKeywords = detectWatermarkKeywords(pageTexts, []);
+        }
+        // Structural OCG/XObject objects
+        structCandidates = await detectStructuralWatermarks();
+      }
+
+      // Combine detected items
+      const candidates = [
+        ...detectedKeywords.map(d => ({ type: 'text', key: d.text, label: `"${d.text}" found on ${d.pages} page(s)` })),
+        ...structCandidates.map(s => ({ type: s.type, ref: s.ref, label: s.label })),
+        ...scannedCandidates
+      ];
+
+      // Re-render checklist
+      renderCandidates(candidates);
       setPhaseState(1, 'done');
-      log('Scanned image PDF detected — activating CV Image Engine automatically.', 'blue');
-      setPhaseState(2, 'active');
-      log('══ Phase 2: CV Image Engine ══', 'blue');
-      await runCVEngine();
-      setPhaseState(2, 'done');
-      setPhaseState(3, 'skip');
-      setPhaseState(4, 'skip');
-      await doPhase5();
+
+      // Change status to prompt the user
+      log('Paused: Please review and confirm the watermarks to remove.', 'blue');
+      ui.overallStatus.textContent = 'AWAITING CONFIRMATION';
+      ui.overallStatus.style.color = '#fbbf24'; // Yellow
+      setProgress(35);
+
+      // Wait for user interaction
+      const choice = await new Promise((resolve) => {
+        const onConfirm = () => {
+          const checkedBoxes = ui.candidatesSection.querySelectorAll('.candidate-chk:checked');
+          const selected = Array.from(checkedBoxes).map(cb => {
+            const idx = parseInt(cb.getAttribute('data-idx'));
+            return candidates[idx];
+          });
+          ui.btnConfirmPurge.removeEventListener('click', onConfirm);
+          ui.btnAskGeminiDetection.removeEventListener('click', onAskGemini);
+          resolve({ action: 'purge', selected });
+        };
+
+        const onAskGemini = () => {
+          ui.btnConfirmPurge.removeEventListener('click', onConfirm);
+          ui.btnAskGeminiDetection.removeEventListener('click', onAskGemini);
+          resolve({ action: 'gemini' });
+        };
+
+        ui.btnConfirmPurge.addEventListener('click', onConfirm);
+        ui.btnAskGeminiDetection.addEventListener('click', onAskGemini);
+      });
+
+      if (choice.action === 'purge') {
+        selectedCandidates = choice.selected;
+        userConfirmed = true;
+      } else if (choice.action === 'gemini') {
+        // Run Gemini Flow
+        const key = state.geminiKey
+          || (ui.geminiKeyInput ? ui.geminiKeyInput.value.trim() : '')
+          || ($('sidebar-gemini-key') ? $('sidebar-gemini-key').value.trim() : '');
+
+        if (!key) {
+          log('Please configure your Gemini API Key in the sidebar or Gemini panel first.', 'warn');
+          showGeminiPanel();
+          continue;
+        }
+
+        setPhaseState(3, 'active');
+        log(`Querying ${GEMINI_MODEL} to identify watermarks…`, 'blue');
+        try {
+          let geminiPageTexts = pageTexts;
+          if (pdfType === 'scanned') {
+            log('Extracting text layer for Gemini AI analysis…');
+            geminiPageTexts = await extractAllPageText();
+          }
+
+          const watermarkStr = await queryGemini(key, geminiPageTexts);
+          if (watermarkStr) {
+            log(`Gemini identified: "${watermarkStr}"`, 'green');
+            setPhaseState(3, 'done');
+            if (!watermarkList.includes(watermarkStr)) {
+              watermarkList.push(watermarkStr);
+              renderChips();
+            }
+          } else {
+            setPhaseState(3, 'done');
+            log('Gemini could not identify any watermarks from text.', 'warn');
+          }
+        } catch (e) {
+          setPhaseState(3, 'error');
+          log('Gemini error: ' + e.message, 'err');
+        }
+      }
+    }
+
+    // Hide confirmation panel
+    ui.candidatesSection.style.display = 'none';
+    ui.overallStatus.textContent = 'RUNNING';
+    ui.overallStatus.style.color = '';
+
+    // If nothing selected or custom entered, cancel
+    if (selectedCandidates.length === 0 && watermarkList.length === 0) {
+      log('No watermarks selected or specified. Purge cancelled.', 'warn');
+      ui.btnStartPurge.disabled = false;
+      ui.btnStartPurge.textContent = '⚡ Start Watermark Purge';
+      ui.btnStartPurge.style.opacity = '1';
       return;
     }
 
-    // ── Vector PDF: extract all text ─────────────────────────────────────────
-    log('Extracting text from all pages via pdf.js…');
-    const pageTexts = await extractAllPageText();
-    state.pageTexts = pageTexts;
-    const totalItems = pageTexts.reduce((s, p) => s + p.items.length, 0);
-    log(`Extracted ${totalItems} text items across ${pageTexts.length} page(s).`, 'dim');
-    setProgress(18);
+    // ══ PHASE 2: SMART REMOVAL ════════════════════════════════════════════
+    setPhaseState(2, 'active');
+    log('══ Phase 2: Smart Removal ══', 'blue');
+    await sleep(80);
 
-    // Step 2: Check user-defined watermarks first, then auto-keywords
-    let detectedKeywords = [];
+    let totalRemoved = 0;
 
-    if (watermarkList.length > 0) {
-      log(`Checking ${watermarkList.length} user-defined watermark(s)…`);
-      const userMatches = detectWatermarkKeywords(pageTexts, watermarkList);
-      if (userMatches.length > 0) {
-        detectedKeywords = userMatches;
-        log(`User watermarks found in text: ${userMatches.map(d => `"${d.text}"`).join(', ')}`, 'green');
-      } else {
-        log('User-defined watermarks not matched in extracted text. Running auto-detection…', 'warn');
-        // Fall back to auto-detection keywords
-        detectedKeywords = detectWatermarkKeywords(pageTexts, []);
-      }
+    if (pdfType === 'scanned') {
+      const enabledKeys = selectedCandidates.filter(c => c.type === 'template').map(c => c.key);
+      log(`Activating CV Image Engine for templates: [${enabledKeys.join(', ')}]…`);
+      await runCVEngine(enabledKeys);
+      totalRemoved = enabledKeys.length;
     } else {
-      // No user input: auto-detect
-      detectedKeywords = detectWatermarkKeywords(pageTexts, []);
-    }
+      // Vector removal
+      const textToRemove = selectedCandidates.filter(c => c.type === 'text').map(c => c.key);
+      const structural = selectedCandidates.filter(c => c.type === 'xobject' || c.type === 'ocg');
 
-    // Step 3: Structural scan (OCG / XObject)
-    log('Scanning PDF structure for watermark objects…');
-    const structCandidates = await detectStructuralWatermarks();
-    setProgress(28);
-
-    const foundSomething = detectedKeywords.length > 0 || structCandidates.length > 0;
-
-    if (foundSomething) {
-      if (detectedKeywords.length > 0) {
-        log(`Phase 1 ✓ — Text watermarks: ${detectedKeywords.map(d => `"${d.text}" (${d.pages}pg)`).join(', ')}`, 'green');
+      // Also include any user-entered chips
+      for (const wm of watermarkList) {
+        if (!textToRemove.includes(wm)) textToRemove.push(wm);
       }
-      if (structCandidates.length > 0) {
-        log(`Phase 1 ✓ — Structural watermarks: ${structCandidates.length} object(s)`, 'green');
-      }
-      setPhaseState(1, 'done');
 
-      renderCandidates([
-        ...detectedKeywords.map(d => ({ type: 'text', label: `"${d.text}" found on ${d.pages} page(s)` })),
-        ...structCandidates,
-      ]);
-
-      // ══ PHASE 2: SMART REMOVAL ════════════════════════════════════════════
-      setPhaseState(2, 'active');
-      log('══ Phase 2: Smart Removal ══', 'blue');
-      await sleep(80);
-
-      let totalRemoved = 0;
-
-      // Method A: coordinate-based white overlay (most reliable)
-      for (const { text } of detectedKeywords) {
+      for (const text of textToRemove) {
         log(`Removing "${text}" via coordinate overlay…`);
         totalRemoved += await removeByCoordinates(text);
-        // Also try content stream byte scan as supplemental
         totalRemoved += await searchAndRemoveByText(text);
       }
 
-      // Also try user watermarks that weren't in auto-detected list
-      for (const wm of watermarkList) {
-        if (!detectedKeywords.find(d => d.text.toUpperCase() === wm.toUpperCase())) {
-          log(`Trying user watermark "${wm}" via stream search…`);
-          totalRemoved += await searchAndRemoveByText(wm);
-        }
+      if (structural.length > 0) {
+        log(`Removing ${structural.length} structural watermark object(s)…`);
+        totalRemoved += await removeStructuralWatermarks(structural);
       }
+    }
 
-      // Method B: structural removal
-      if (structCandidates.length > 0) {
-        totalRemoved += await removeStructuralWatermarks(structCandidates);
-      }
+    setProgress(80);
 
-      setProgress(80);
-
-      if (totalRemoved > 0) {
-        setPhaseState(2, 'done');
-        log(`Phase 2 ✓ — Removed ${totalRemoved} watermark instance(s).`, 'green');
-        setPhaseState(3, 'skip');
-        setPhaseState(4, 'skip');
-        await doPhase5();
-      } else {
-        setPhaseState(2, 'done');
-        log('Phase 2 — Watermarks detected but direct removal had limited effect.', 'warn');
-        log('Font encoding may prevent stream-level removal. Trying AI + manual fallback…', 'warn');
-        setProgress(40);
-        await tryGeminiOrHint(pageTexts);
-      }
-
+    if (totalRemoved > 0) {
+      setPhaseState(2, 'done');
+      log(`Phase 2 ✓ — Successfully purged watermarks.`, 'green');
+      setPhaseState(3, 'skip');
+      setPhaseState(4, 'skip');
+      await doPhase5();
     } else {
-      setPhaseState(1, 'done');
-      log('Phase 1 — No watermarks detected in text layer or structure.', 'warn');
-      if (watermarkList.length > 0) {
-        log(`Target "${watermarkList.join(', ')}" not found via text extraction.`, 'warn');
-      }
-      setProgress(30);
-      setPhaseState(2, 'skip');
-      await tryGeminiOrHint(pageTexts);
+      setPhaseState(2, 'done');
+      log('Phase 2 — Direct removal had no visible effect (no matches were actually removed).', 'warn');
+      log('Please check your targets and hint configurations.', 'dim');
+      setProgress(90);
+      setPhaseState(3, 'skip');
+      setPhaseState(4, 'skip');
+      await doPhase5();
     }
 
   } catch (err) {
@@ -986,15 +1097,31 @@ ui.btnProcessAnother.addEventListener('click', resetAll);
 
 // ─── RENDER CANDIDATES ────────────────────────────────────────────────────────
 function renderCandidates(candidates) {
-  if (!candidates.length) return;
+  state.candidates = candidates; // save globally
   ui.candidatesSection.style.display = 'block';
   ui.candidatesList.innerHTML = '';
-  candidates.forEach((c) => {
+  
+  if (!candidates.length) {
+    ui.candidatesList.innerHTML = `
+      <div style="font-size:0.8rem;color:var(--text-muted);text-align:center;padding:12px;border:1px dashed var(--border);border-radius:8px;background:rgba(255,255,255,0.02);">
+        No watermarks auto-detected. Add custom targets in the input box above, or click "Ask Gemini AI".
+      </div>
+    `;
+    return;
+  }
+
+  candidates.forEach((c, idx) => {
     const div = document.createElement('div');
     div.className = 'candidate-item';
-    const typeLabel = c.type === 'xobject' ? 'XOBJ' : c.type === 'ocg' ? 'OCG' : 'TEXT';
+    div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;width:100%;gap:12px;';
+    
+    const typeLabel = c.type === 'xobject' ? 'XOBJ' : c.type === 'ocg' ? 'OCG' : c.type === 'template' ? 'IMAGE' : 'TEXT';
+    
     div.innerHTML = `
-      <span class="candidate-text" title="${escHtml(c.label)}">${escHtml(c.label)}</span>
+      <div style="display:flex;align-items:center;gap:10px;flex:1;overflow:hidden;">
+        <input type="checkbox" class="candidate-chk" data-idx="${idx}" style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;" checked />
+        <span class="candidate-text" title="${escHtml(c.label)}" style="font-size:0.82rem;font-family:var(--mono);">${escHtml(c.label)}</span>
+      </div>
       <span class="candidate-tag">${typeLabel}</span>
     `;
     ui.candidatesList.appendChild(div);
@@ -1132,7 +1259,7 @@ log('Drop a PDF above to begin.', 'dim');
 // ══════════════════════════════════════════════════════════════════════════════
 const templates = { wc: null, jc: null, bb: null };
 
-async function runCVEngine() {
+async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
   log('══ Running CV Image Purge Engine (Scanned PDF mode) ══', 'blue');
   setProgress(5);
   log('Loading visual watermark templates…');
@@ -1162,7 +1289,7 @@ async function runCVEngine() {
       await page.render({ canvasContext: ctx, viewport }).promise;
 
       const imgData     = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const cleanedData = purgeCanvasPixels(imgData);
+      const cleanedData = purgeCanvasPixels(imgData, enabledTemplates);
       ctx.putImageData(cleanedData, 0, 0);
 
       const jpegUrl   = canvas.toDataURL('image/jpeg', 0.90);
@@ -1210,56 +1337,67 @@ async function runCVEngine() {
   log('✓ CV Image Purge complete across all pages.', 'green');
 }
 
-function purgeCanvasPixels(imgData) {
+function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
   const w = imgData.width, h = imgData.height, pixels = imgData.data;
   const redMask  = new Uint8Array(w * h);
   const blueMask = new Uint8Array(w * h);
 
-  for (let i = 0; i < pixels.length; i += 4) {
-    const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+  let hasRedMatch = enabledTemplates.includes('wc') || enabledTemplates.includes('jc');
+  let hasBlueMatch = enabledTemplates.includes('bb');
 
-    // Pre-filtering: skip low-saturation pixels (gray background, dark text, white pages)
-    // This bypasses complex RGB-to-HSV math for 95%+ of the pixels.
-    const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-    const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-    if (max - min < 15) continue;
+  if (hasRedMatch || hasBlueMatch) {
+    for (let i = 0; i < pixels.length; i += 4) {
+      const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
 
-    const hsv = rgbToHsv(r, g, b);
-    if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
-      if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
+      const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      if (max - min < 15) continue;
+
+      const hsv = rgbToHsv(r, g, b);
+      if (hasRedMatch && ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180))) {
+        if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
+      }
+      if (hasBlueMatch && (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80)) {
+        blueMask[i / 4] = 1;
+      }
     }
-    if (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80) blueMask[i / 4] = 1;
   }
 
-  const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
-  const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
-  if (resWc.score >= 0.45) {
-    const bg = sampleCanvasBg(pixels, w, h, resWc.x, resWc.y, resWc.tw, resWc.th, redMask);
-    erasePoints(pixels, w, h, resWc.x, resWc.y, resWc.points, bg);
+  if (enabledTemplates.includes('wc')) {
+    const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
+    const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
+    if (resWc.score >= 0.45) {
+      const bg = sampleCanvasBg(pixels, w, h, resWc.x, resWc.y, resWc.tw, resWc.th, redMask);
+      erasePoints(pixels, w, h, resWc.x, resWc.y, resWc.points, bg);
+    }
   }
 
-  const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
-  const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
-  if (resJc.score >= 0.45) {
-    const bg = sampleCanvasBg(pixels, w, h, resJc.x, resJc.y, resJc.tw, resJc.th, redMask);
-    erasePoints(pixels, w, h, resJc.x, resJc.y, resJc.points, bg);
+  if (enabledTemplates.includes('jc')) {
+    const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
+    const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
+    if (resJc.score >= 0.45) {
+      const bg = sampleCanvasBg(pixels, w, h, resJc.x, resJc.y, resJc.tw, resJc.th, redMask);
+      erasePoints(pixels, w, h, resJc.x, resJc.y, resJc.points, bg);
+    }
   }
 
-  const sHBb = Math.round(h * 0.15);
-  const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
-  if (resBb.score >= 0.45) {
-    const by = resBb.y, scale = w / 1462.0, curveWidth = Math.round(120 * scale);
-    for (let y = by - 3; y < h; y++)
-      for (let x = 0; x < w; x++) {
-        const idx = (y * w + x) * 4;
-        pixels[idx] = pixels[idx+1] = pixels[idx+2] = 255;
-      }
-    const cyStart = Math.max(0, by - 45);
-    for (let y = cyStart; y < by - 3; y++)
-      for (let x = 0; x < curveWidth; x++) {
-        const idx = (y * w + x) * 4;
-        pixels[idx] = pixels[idx+1] = pixels[idx+2] = 255;
-      }
+  if (enabledTemplates.includes('bb')) {
+    const sHBb = Math.round(h * 0.15);
+    const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
+    if (resBb.score >= 0.45) {
+      const by = resBb.y, scale = w / 1462.0, curveWidth = Math.round(120 * scale);
+      for (let y = by - 3; y < h; y++)
+        for (let x = 0; x < w; x++) {
+          const idx = (y * w + x) * 4;
+          pixels[idx] = pixels[idx+1] = pixels[idx+2] = 255;
+        }
+      const cyStart = Math.max(0, by - 45);
+      for (let y = cyStart; y < by - 3; y++)
+        for (let x = 0; x < curveWidth; x++) {
+          const idx = (y * w + x) * 4;
+          pixels[idx] = pixels[idx+1] = pixels[idx+2] = 255;
+        }
+    }
   }
 
   return imgData;

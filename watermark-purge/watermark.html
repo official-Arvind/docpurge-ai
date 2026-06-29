@@ -508,12 +508,25 @@
           </div>
         </div>
 
-        <!-- Detected candidates -->
-        <div id="candidates-section" style="display:none;margin-top:20px;">
-          <div style="font-size:0.82rem;font-weight:700;color:var(--text-muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:0.08em;">
-            Detected Watermark Objects
+        <!-- Detected candidates (Interactive confirmation) -->
+        <div id="candidates-section" style="display:none;margin-top:20px;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:16px;">
+          <div style="font-size:0.85rem;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+            🔍 <span>Confirm Watermarks to Remove</span>
           </div>
-          <div class="candidates-list" id="candidates-list"></div>
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:12px;line-height:1.4;">
+            Select which detected items you want to remove. You can also type custom watermarks below or add them to the chips list.
+          </div>
+          
+          <div class="candidates-list" id="candidates-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;"></div>
+          
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-green" id="btn-confirm-purge" style="flex:1;justify-content:center;padding:12px;font-weight:600;">
+              ⚡ Confirm &amp; Remove Selected
+            </button>
+            <button class="btn btn-outline" id="btn-ask-gemini-detection" style="justify-content:center;padding:12px;gap:6px;">
+              🤖 Ask Gemini AI
+            </button>
+          </div>
         </div>
       </div>
     </div>
