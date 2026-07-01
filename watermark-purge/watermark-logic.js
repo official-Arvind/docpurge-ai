@@ -818,7 +818,7 @@ ui.btnStartPurge.addEventListener('click', async () => {
         await loadAllTemplates();
 
         // Perform a pre-match check on Page 1 to see which built-in templates match
-        const page     = await pdfjsDoc.getPage(1);
+        const page     = await state.pdfjsDoc.getPage(1);
         const viewport = page.getViewport({ scale: 1.5 });
         const canvas  = document.createElement('canvas');
         canvas.width  = viewport.width;
