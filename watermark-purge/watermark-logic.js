@@ -552,32 +552,118 @@ function removeXObjectFromPage(page, targetRef, context) {
 // ─── GEMINI AI ASSIST ─────────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════════
 
-async function queryGemini(apiKey, pageTexts) {
-  const contextStr = pageTexts
-    .slice(0, 5)
-    .map(p => `[Page ${p.page}]: ${p.text.slice(0, 2000)}`)
-    .join('\n\n');
+async function getPageImageBase64(pageIndex) {
+  const page = await state.pdfjsDoc.getPage(pageIndex);
+  const viewport = page.getViewport({ scale: 1.5 });
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  const ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  const jpegUrl = canvas.toDataURL('image/jpeg', 0.85);
+  return jpegUrl.split(',')[1];
+}
 
+async function queryGemini(apiKey, pageTexts, pdfType = 'vector', userHints = []) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const parts = [];
 
-  const payload = {
-    contents: [{
-      parts: [{
-        text: `You are a PDF watermark detection expert. Analyze the following extracted PDF page text.
+  if (pdfType === 'scanned') {
+    log('Rendering page image for Gemini multimodal AI analysis…');
+    // Find matching page index from hints, or default to Page 1
+    let targetPageNum = 1;
+    if (userHints.length > 0) {
+      for (const hint of userHints) {
+        const lowerHint = hint.toLowerCase().trim();
+        if (!lowerHint) continue;
+        for (const p of pageTexts) {
+          if (p.text.toLowerCase().includes(lowerHint)) {
+            targetPageNum = p.page;
+            break;
+          }
+        }
+        if (targetPageNum !== 1) break;
+      }
+    }
+    
+    log(`Sending Page ${targetPageNum} image to Gemini…`);
+    const base64Img = await getPageImageBase64(targetPageNum);
+    
+    let promptText = `Analyze this scanned document page image.
+Identify the exact text of any digital stamps, diagonal overlay watermarks, or referral code banners that are added on top of the document content.`;
+
+    if (userHints.length > 0) {
+      promptText += `\nHint: The user thinks the watermark is similar to: "${userHints.join(', ')}". Verify the exact spelling and formatting on the image and return it.`;
+    }
+    
+    promptText += `\n\nCRITICAL INSTRUCTIONS:
+1. Return ONLY the exact watermark string as it appears on the image — no explanation, no quotes, no extra text.
+2. If multiple watermarks exist, return the most prominent one.
+3. If you cannot find any watermark, return exactly: NONE`;
+
+    parts.push({ text: promptText });
+    parts.push({
+      inlineData: {
+        mimeType: 'image/jpeg',
+        data: base64Img
+      }
+    });
+
+  } else {
+    // Vector PDF: send text content
+    let targetPages = [];
+    if (userHints.length > 0) {
+      for (const hint of userHints) {
+        const lowerHint = hint.toLowerCase().trim();
+        if (!lowerHint) continue;
+        for (const p of pageTexts) {
+          if (p.text.toLowerCase().includes(lowerHint)) {
+            if (!targetPages.includes(p)) targetPages.push(p);
+          }
+        }
+      }
+    }
+
+    if (targetPages.length === 0) {
+      targetPages = pageTexts.slice(0, 5);
+    } else {
+      let idx = 0;
+      while (targetPages.length < 5 && idx < pageTexts.length) {
+        const p = pageTexts[idx];
+        if (!targetPages.includes(p)) targetPages.push(p);
+        idx++;
+      }
+    }
+
+    targetPages.sort((a, b) => a.page - b.page);
+
+    const contextStr = targetPages
+      .map(p => `[Page ${p.page}]: ${p.text.slice(0, 2000)}`)
+      .join('\n\n');
+
+    let promptText = `You are a PDF watermark detection expert. Analyze the following extracted PDF page text.
 Identify the exact watermark text — text like CONFIDENTIAL, DRAFT, SAMPLE, COPY, VOID, or similar labels that:
 - Repeats across multiple pages at the same position
 - Is unrelated to the main document content
 - Appears to be a stamp, diagonal overlay, header label, or footer imprint
 
 PDF extracted text:
-${contextStr}
+${contextStr}`;
 
-CRITICAL INSTRUCTIONS:
+    if (userHints.length > 0) {
+      promptText += `\n\nHint: The user thinks the watermark is similar to: "${userHints.join(', ')}". Find the exact matching string in the text.`;
+    }
+
+    promptText += `\n\nCRITICAL INSTRUCTIONS:
 1. Return ONLY the exact watermark string as it appears in the text — no explanation, no punctuation, no quotes.
 2. If multiple watermarks exist, return only the single most prominent one.
-3. If you cannot identify any watermark confidently, return exactly: NONE`
-      }]
-    }],
+3. If you cannot identify any watermark confidently, return exactly: NONE`;
+
+    parts.push({ text: promptText });
+  }
+
+  const payload = {
+    contents: [{ parts }],
     generationConfig: {
       temperature:     0.1,
       topK:            1,
@@ -635,7 +721,7 @@ async function tryGeminiOrHint(pageTexts) {
 
     try {
       log(`Querying ${GEMINI_MODEL} with page text context…`, 'blue');
-      const watermarkStr = await queryGemini(key, pageTexts);
+      const watermarkStr = await queryGemini(key, pageTexts, state.pdfType || 'vector', watermarkList);
 
       if (watermarkStr) {
         log(`Gemini identified: "${watermarkStr}"`, 'green');
@@ -728,7 +814,7 @@ ui.btnRunGemini.addEventListener('click', async () => {
   try {
     const pageTexts   = await extractAllPageText();
     state.pageTexts = pageTexts;
-    const watermarkStr = await queryGemini(key, pageTexts);
+    const watermarkStr = await queryGemini(key, pageTexts, state.pdfType || 'vector', watermarkList);
 
     if (!watermarkStr) throw new Error('Gemini could not identify a watermark from this PDF text.');
 
@@ -791,6 +877,7 @@ ui.btnStartPurge.addEventListener('click', async () => {
     // Step 1: Detect PDF type
     log('Detecting PDF type…');
     const pdfType = await detectPDFType();
+    state.pdfType = pdfType;
     log(`PDF type: ${pdfType === 'scanned' ? '🖼️  Scanned Image PDF' : '📄  Vector/Text PDF'}`,
         pdfType === 'scanned' ? 'warn' : 'dim');
     setProgress(10);
@@ -980,7 +1067,7 @@ ui.btnStartPurge.addEventListener('click', async () => {
             pageTexts = geminiPageTexts;
           }
 
-          const watermarkStr = await queryGemini(key, geminiPageTexts);
+          const watermarkStr = await queryGemini(key, geminiPageTexts, pdfType, watermarkList);
           if (watermarkStr) {
             log(`Gemini identified: "${watermarkStr}"`, 'green');
             setPhaseState(3, 'done');
