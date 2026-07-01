@@ -27,7 +27,7 @@
 </a>
 &nbsp;
 <a href="https://github.com/official-Arvind/docpurge-ai/releases">
-  <img src="https://img.shields.io/badge/Version-1.0%20BETA-a855f7?style=for-the-badge&logo=rocket&logoColor=white" alt="Version"/>
+  <img src="https://img.shields.io/badge/Version-1.0-a855f7?style=for-the-badge&logo=rocket&logoColor=white" alt="Version"/>
 </a>
 
 <br/><br/>
