@@ -953,30 +953,24 @@ ui.btnStartPurge.addEventListener('click', async () => {
 
         log(`  Visual pre-match scores: Red Stamp(WC)=${resWc.score.toFixed(2)}, Red Stamp(JC)=${resJc.score.toFixed(2)}, Blue Banner=${resBb.score.toFixed(2)}`, 'dim');
 
-        if (resWc.score >= 0.12) {
-          scannedCandidates.push({
-            type: 'template',
-            key: 'wc',
-            label: `Red Stamp: "(AKM SIR)# J STAR" (Match: ${Math.round(resWc.score * 100)}%)`,
-            checked: resWc.score >= 0.35
-          });
-        }
-        if (resJc.score >= 0.12) {
-          scannedCandidates.push({
-            type: 'template',
-            key: 'jc',
-            label: `Red Stamp: "J*" (Match: ${Math.round(resJc.score * 100)}%)`,
-            checked: resJc.score >= 0.35
-          });
-        }
-        if (resBb.score >= 0.12) {
-          scannedCandidates.push({
-            type: 'template',
-            key: 'bb',
-            label: `Blue Banner: "Referral Code" (Match: ${Math.round(resBb.score * 100)}%)`,
-            checked: resBb.score >= 0.35
-          });
-        }
+        scannedCandidates.push({
+          type: 'template',
+          key: 'wc',
+          label: `Red Stamp: "(AKM SIR)# J STAR" (Match: ${Math.round(resWc.score * 100)}%)`,
+          checked: resWc.score >= 0.35
+        });
+        scannedCandidates.push({
+          type: 'template',
+          key: 'jc',
+          label: `Red Stamp: "J*" (Match: ${Math.round(resJc.score * 100)}%)`,
+          checked: resJc.score >= 0.35
+        });
+        scannedCandidates.push({
+          type: 'template',
+          key: 'bb',
+          label: `Blue Banner: "Referral Code" (Match: ${Math.round(resBb.score * 100)}%)`,
+          checked: resBb.score >= 0.35
+        });
       }
 
       // Save detected candidates lists to state cache so they can be re-assembled in real-time
@@ -1428,81 +1422,141 @@ log('Drop a PDF above to begin.', 'dim');
 const templates = { wc: null, jc: null, bb: null };
 
 async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
-  log('══ Running CV Image Purge Engine (Scanned PDF mode) ══', 'blue');
+  log('══ Running CV Image Purge Engine (In-Place Embedded Image mode) ══', 'blue');
   setProgress(5);
   log('Loading visual watermark templates…');
   await loadAllTemplates();
   setProgress(10);
 
-  const pdfjsDoc = state.pdfjsDoc;
-  const numPages = pdfjsDoc.numPages;
-  const outDoc   = await PDFLib.PDFDocument.create();
+  const doc = state.pdfLibDoc;
+  const objects = doc.context.enumerateIndirectObjects();
+  const imageObjects = [];
 
-  // Concurrency limit of 4 keeps CPU/GPU pipelines fully saturated
-  const CONCURRENCY = 4;
-  const pageIndices = Array.from({ length: numPages }, (_, i) => i);
-  let completedCount = 0;
-  const processedPages = new Array(numPages);
+  objects.forEach(([ref, obj]) => {
+    if (obj instanceof PDFLib.PDFRawStream) {
+      const dict = obj.dict;
+      const subtype = dict.get(PDFLib.PDFName.of('Subtype'));
+      if (subtype && subtype.toString() === '/Image') {
+        const width = dict.get(PDFLib.PDFName.of('Width')).asNumber();
+        const height = dict.get(PDFLib.PDFName.of('Height')).asNumber();
+        // Skip icons/small decorative images
+        if (width >= 200 && height >= 50) {
+          imageObjects.push({ ref, obj, width, height });
+        }
+      }
+    }
+  });
 
-  async function worker(pi) {
-    try {
-      const page     = await pdfjsDoc.getPage(pi + 1);
-      const viewport = page.getViewport({ scale: 1.5 });
+  const total = imageObjects.length;
+  if (total === 0) {
+    log('No embedded images found in PDF structure to process.', 'dim');
+    setProgress(80);
+    return;
+  }
 
-      const canvas  = document.createElement('canvas');
-      canvas.width  = viewport.width;
-      canvas.height = viewport.height;
+  log(`Found ${total} embedded image(s) to process.`, 'dim');
+  let cleanedCount = 0;
+
+  // Process images in parallel batches to keep CPU pipelines saturated
+  const BATCH_SIZE = 4;
+  for (let i = 0; i < total; i += BATCH_SIZE) {
+    const batch = imageObjects.slice(i, i + BATCH_SIZE);
+    const promises = batch.map(async (imgObj) => {
+      const { ref, obj, width, height } = imgObj;
+      const dict = obj.dict;
+      const filter = dict.get(PDFLib.PDFName.of('Filter'));
+      const filterStr = filter ? filter.toString() : '';
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext('2d');
 
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      let decodedSuccessfully = false;
 
-      const imgData     = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const cleanedData = purgeCanvasPixels(imgData, enabledTemplates);
-      ctx.putImageData(cleanedData, 0, 0);
+      // 1. Decode stream bytes
+      if (filterStr.includes('DCTDecode') || filterStr.includes('JPXDecode')) {
+        const compressedBytes = obj.contents;
+        const blob = new Blob([compressedBytes], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.src = url;
+        try {
+          if (typeof img.decode === 'function') {
+            await img.decode();
+          } else {
+            await new Promise((resolve, reject) => {
+              img.onload = resolve;
+              img.onerror = reject;
+            });
+          }
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          decodedSuccessfully = true;
+        } catch (err) {
+          log(`  Failed to decode JPEG image (obj ${ref.objectNumber}): ${err.message}`, 'warn');
+        }
+      } else if (filterStr.includes('FlateDecode')) {
+        try {
+          const uncompressed = obj.decode();
+          const colorspace = dict.get(PDFLib.PDFName.of('ColorSpace'));
+          const csStr = colorspace ? colorspace.toString() : '/DeviceRGB';
+          const imgData = ctx.createImageData(width, height);
 
-      const jpegUrl   = canvas.toDataURL('image/jpeg', 0.90);
-      const jpegBytes = await fetch(jpegUrl).then(res => res.arrayBuffer());
-
-      processedPages[pi] = {
-        bytes: jpegBytes,
-        width: viewport.width,
-        height: viewport.height
-      };
-
-      completedCount++;
-      log(`  Processed page ${pi + 1}/${numPages}…`);
-      setProgress(10 + Math.round((completedCount / numPages) * 70));
-    } catch (err) {
-      log(`✗ Error processing page ${pi + 1}: ${err.message}`, 'err');
-    }
-  }
-
-  // Run concurrency pool
-  const pool = [];
-  for (let i = 0; i < Math.min(CONCURRENCY, numPages); i++) {
-    pool.push((async () => {
-      while (pageIndices.length > 0) {
-        const nextIdx = pageIndices.shift();
-        await worker(nextIdx);
+          if (csStr === '/DeviceRGB') {
+            for (let k = 0, j = 0; k < uncompressed.length && j < imgData.data.length; k += 3, j += 4) {
+              imgData.data[j] = uncompressed[k];
+              imgData.data[j+1] = uncompressed[k+1];
+              imgData.data[j+2] = uncompressed[k+2];
+              imgData.data[j+3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            decodedSuccessfully = true;
+          } else if (csStr === '/DeviceGray') {
+            for (let k = 0, j = 0; k < uncompressed.length && j < imgData.data.length; k++, j += 4) {
+              imgData.data[j] = imgData.data[j+1] = imgData.data[j+2] = uncompressed[k];
+              imgData.data[j+3] = 255;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            decodedSuccessfully = true;
+          }
+        } catch (err) {
+          log(`  Failed to decode Flate image (obj ${ref.objectNumber}): ${err.message}`, 'warn');
+        }
       }
-    })());
+
+      // 2. Clean and write back
+      if (decodedSuccessfully) {
+        const imgData = ctx.getImageData(0, 0, width, height);
+        const cleanedData = purgeCanvasPixels(imgData, enabledTemplates);
+        ctx.putImageData(cleanedData, 0, 0);
+
+        // Convert canvas image back to raw JPEG bytes
+        const jpegUrl = canvas.toDataURL('image/jpeg', 0.92);
+        const base64Data = jpegUrl.split(',')[1];
+        const binaryString = atob(base64Data);
+        const newBytes = new Uint8Array(binaryString.length);
+        for (let k = 0; k < binaryString.length; k++) {
+          newBytes[k] = binaryString.charCodeAt(k);
+        }
+
+        // In-place replace raw stream bytes
+        obj.contents = newBytes;
+
+        // Reset Filter dictionary keys to DCTDecode and cleanup color properties
+        dict.set(PDFLib.PDFName.of('Filter'), PDFLib.PDFName.of('DCTDecode'));
+        dict.delete(PDFLib.PDFName.of('ColorSpace'));
+
+        cleanedCount++;
+        log(`  Cleaned image object (obj ${ref.objectNumber})`, 'green');
+      }
+    });
+
+    await Promise.all(promises);
+    setProgress(10 + Math.round((i / total) * 70));
   }
 
-  await Promise.all(pool);
-
-  // Assemble pages in correct order
-  log('Assembling final PDF document…');
-  for (let pi = 0; pi < numPages; pi++) {
-    const pData = processedPages[pi];
-    if (pData) {
-      const embedImg  = await outDoc.embedJpg(pData.bytes);
-      const newPage   = outDoc.addPage([pData.width, pData.height]);
-      newPage.drawImage(embedImg, { x: 0, y: 0, width: pData.width, height: pData.height });
-    }
-  }
-
-  state.pdfLibDoc = outDoc;
-  log('✓ CV Image Purge complete across all pages.', 'green');
+  log(`✓ Purged ${cleanedCount} embedded image(s) in-place.`, 'green');
 }
 
 function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
