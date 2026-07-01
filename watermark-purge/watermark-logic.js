@@ -1421,6 +1421,16 @@ log('Drop a PDF above to begin.', 'dim');
 // ══════════════════════════════════════════════════════════════════════════════
 const templates = { wc: null, jc: null, bb: null };
 
+async function decompressZlib(bytes) {
+  const ds = new DecompressionStream('deflate');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const response = new Response(ds.readable);
+  const buffer = await response.arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
 async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
   log('══ Running CV Image Purge Engine (In-Place Embedded Image mode) ══', 'blue');
   setProgress(5);
@@ -1498,7 +1508,7 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
         }
       } else if (filterStr.includes('FlateDecode')) {
         try {
-          const uncompressed = obj.decode();
+          const uncompressed = await decompressZlib(obj.contents);
           const colorspace = dict.get(PDFLib.PDFName.of('ColorSpace'));
           const csStr = colorspace ? colorspace.toString() : '/DeviceRGB';
           const imgData = ctx.createImageData(width, height);
