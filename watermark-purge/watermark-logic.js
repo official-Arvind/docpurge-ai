@@ -813,6 +813,7 @@ ui.btnStartPurge.addEventListener('click', async () => {
       let structCandidates = [];
       let scannedCandidates = [];
 
+      // 1. Visual templates pre-match (for Scanned PDFs)
       if (pdfType === 'scanned') {
         log('Running visual templates pre-match on Page 1…');
         await loadAllTemplates();
@@ -846,36 +847,77 @@ ui.btnStartPurge.addEventListener('click', async () => {
 
         const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
         const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
-        if (resWc.score >= 0.40) {
-          scannedCandidates.push({ type: 'template', key: 'wc', label: 'Red Stamp: "(AKM SIR)# J STAR" (Scanned)' });
-        }
-
+        
         const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
         const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
-        if (resJc.score >= 0.40) {
-          scannedCandidates.push({ type: 'template', key: 'jc', label: 'Red Stamp: "J*" (Scanned)' });
-        }
-
+        
         const sHBb = Math.round(h * 0.15);
         const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
-        if (resBb.score >= 0.40) {
-          scannedCandidates.push({ type: 'template', key: 'bb', label: 'Blue Banner: "Referral Code: JSTARLIVE" (Scanned)' });
+
+        log(`  Visual pre-match scores: Red Stamp(WC)=${resWc.score.toFixed(2)}, Red Stamp(JC)=${resJc.score.toFixed(2)}, Blue Banner=${resBb.score.toFixed(2)}`, 'dim');
+
+        if (resWc.score >= 0.12) {
+          scannedCandidates.push({
+            type: 'template',
+            key: 'wc',
+            label: `Red Stamp: "(AKM SIR)# J STAR" (Match: ${Math.round(resWc.score * 100)}%)`,
+            checked: resWc.score >= 0.35
+          });
         }
-      } else {
-        // Vector keywords
-        if (watermarkList.length > 0) {
-          detectedKeywords = detectWatermarkKeywords(pageTexts, watermarkList);
-        } else {
-          detectedKeywords = detectWatermarkKeywords(pageTexts, []);
+        if (resJc.score >= 0.12) {
+          scannedCandidates.push({
+            type: 'template',
+            key: 'jc',
+            label: `Red Stamp: "J*" (Match: ${Math.round(resJc.score * 100)}%)`,
+            checked: resJc.score >= 0.35
+          });
         }
-        // Structural OCG/XObject objects
-        structCandidates = await detectStructuralWatermarks();
+        if (resBb.score >= 0.12) {
+          scannedCandidates.push({
+            type: 'template',
+            key: 'bb',
+            label: `Blue Banner: "Referral Code" (Match: ${Math.round(resBb.score * 100)}%)`,
+            checked: resBb.score >= 0.35
+          });
+        }
       }
+
+      // 2. User custom chips (always include them so the user can confirm them)
+      const userChipsCandidates = watermarkList.map(wm => ({
+        type: 'text',
+        key: wm,
+        label: `Custom Target: "${wm}"`,
+        checked: true
+      }));
+
+      // 3. Auto-detected keywords from text layer (if text exists)
+      if (pageTexts.length > 0) {
+        // Exclude those already in watermarkList to avoid duplicates
+        const autoKeywords = detectWatermarkKeywords(pageTexts, []).filter(
+          dk => !watermarkList.some(wm => wm.toUpperCase() === dk.text.toUpperCase())
+        );
+        detectedKeywords = autoKeywords.map(d => ({
+          type: 'text',
+          key: d.text,
+          label: `"${d.text}" found on ${d.pages} page(s)`,
+          checked: true
+        }));
+      }
+
+      // 4. Structural scan (OCG / XObject)
+      const rawStruct = await detectStructuralWatermarks();
+      structCandidates = rawStruct.map(s => ({
+        type: s.type,
+        ref: s.ref,
+        label: s.label,
+        checked: true
+      }));
 
       // Combine detected items
       const candidates = [
-        ...detectedKeywords.map(d => ({ type: 'text', key: d.text, label: `"${d.text}" found on ${d.pages} page(s)` })),
-        ...structCandidates.map(s => ({ type: s.type, ref: s.ref, label: s.label })),
+        ...userChipsCandidates,
+        ...detectedKeywords,
+        ...structCandidates,
         ...scannedCandidates
       ];
 
@@ -931,9 +973,11 @@ ui.btnStartPurge.addEventListener('click', async () => {
         log(`Querying ${GEMINI_MODEL} to identify watermarks…`, 'blue');
         try {
           let geminiPageTexts = pageTexts;
-          if (pdfType === 'scanned') {
+          if (pdfType === 'scanned' && pageTexts.length === 0) {
             log('Extracting text layer for Gemini AI analysis…');
             geminiPageTexts = await extractAllPageText();
+            state.pageTexts = geminiPageTexts;
+            pageTexts = geminiPageTexts;
           }
 
           const watermarkStr = await queryGemini(key, geminiPageTexts);
@@ -960,9 +1004,9 @@ ui.btnStartPurge.addEventListener('click', async () => {
     ui.overallStatus.textContent = 'RUNNING';
     ui.overallStatus.style.color = '';
 
-    // If nothing selected or custom entered, cancel
-    if (selectedCandidates.length === 0 && watermarkList.length === 0) {
-      log('No watermarks selected or specified. Purge cancelled.', 'warn');
+    // If nothing selected, cancel
+    if (selectedCandidates.length === 0) {
+      log('No watermarks selected. Purge cancelled.', 'warn');
       ui.btnStartPurge.disabled = false;
       ui.btnStartPurge.textContent = '⚡ Start Watermark Purge';
       ui.btnStartPurge.style.opacity = '1';
@@ -976,31 +1020,40 @@ ui.btnStartPurge.addEventListener('click', async () => {
 
     let totalRemoved = 0;
 
-    if (pdfType === 'scanned') {
-      const enabledKeys = selectedCandidates.filter(c => c.type === 'template').map(c => c.key);
-      log(`Activating CV Image Engine for templates: [${enabledKeys.join(', ')}]…`);
-      await runCVEngine(enabledKeys);
-      totalRemoved = enabledKeys.length;
-    } else {
-      // Vector removal
-      const textToRemove = selectedCandidates.filter(c => c.type === 'text').map(c => c.key);
-      const structural = selectedCandidates.filter(c => c.type === 'xobject' || c.type === 'ocg');
+    // 1. If scanned templates are selected: run CV Image Engine first
+    const enabledTemplates = selectedCandidates.filter(c => c.type === 'template').map(c => c.key);
+    if (enabledTemplates.length > 0) {
+      log(`Activating CV Image Engine for templates: [${enabledTemplates.join(', ')}]…`);
+      await runCVEngine(enabledTemplates);
+      totalRemoved += enabledTemplates.length;
+    }
 
-      // Also include any user-entered chips
-      for (const wm of watermarkList) {
-        if (!textToRemove.includes(wm)) textToRemove.push(wm);
-      }
+    // 2. If text watermarks are selected (or entered as chips), run coordinates/stream removal
+    const textToRemove = selectedCandidates.filter(c => c.type === 'text').map(c => c.key);
+    // Also include any user-entered chips
+    for (const wm of watermarkList) {
+      if (!textToRemove.includes(wm)) textToRemove.push(wm);
+    }
 
+    if (textToRemove.length > 0) {
+      log(`Running coordinate overlay & stream removals for: ${textToRemove.map(t => `"${t}"`).join(', ')}…`);
+      let textRemovedCount = 0;
       for (const text of textToRemove) {
-        log(`Removing "${text}" via coordinate overlay…`);
-        totalRemoved += await removeByCoordinates(text);
-        totalRemoved += await searchAndRemoveByText(text);
+        log(`Removing "${text}"…`);
+        textRemovedCount += await removeByCoordinates(text);
+        textRemovedCount += await searchAndRemoveByText(text);
       }
+      log(`  Removed ${textRemovedCount} text instance(s).`, 'green');
+      totalRemoved += textRemovedCount;
+    }
 
-      if (structural.length > 0) {
-        log(`Removing ${structural.length} structural watermark object(s)…`);
-        totalRemoved += await removeStructuralWatermarks(structural);
-      }
+    // 3. If structural items are selected: run structural removal
+    const structural = selectedCandidates.filter(c => c.type === 'xobject' || c.type === 'ocg');
+    if (structural.length > 0) {
+      log(`Removing ${structural.length} structural object(s)…`);
+      const structRemovedCount = await removeStructuralWatermarks(structural);
+      log(`  Removed ${structRemovedCount} structural object(s).`, 'green');
+      totalRemoved += structRemovedCount;
     }
 
     setProgress(80);
@@ -1116,10 +1169,11 @@ function renderCandidates(candidates) {
     div.style.cssText = 'display:flex;align-items:center;justify-content:space-between;width:100%;gap:12px;';
     
     const typeLabel = c.type === 'xobject' ? 'XOBJ' : c.type === 'ocg' ? 'OCG' : c.type === 'template' ? 'IMAGE' : 'TEXT';
+    const checkedAttr = (c.checked === false) ? '' : 'checked';
     
     div.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;flex:1;overflow:hidden;">
-        <input type="checkbox" class="candidate-chk" data-idx="${idx}" style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;" checked />
+        <input type="checkbox" class="candidate-chk" data-idx="${idx}" style="width:16px;height:16px;accent-color:var(--green);cursor:pointer;" ${checkedAttr} />
         <span class="candidate-text" title="${escHtml(c.label)}" style="font-size:0.82rem;font-family:var(--mono);">${escHtml(c.label)}</span>
       </div>
       <span class="candidate-tag">${typeLabel}</span>
