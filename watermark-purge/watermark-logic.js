@@ -852,6 +852,16 @@ ui.btnRunGemini.addEventListener('click', async () => {
 ui.btnStartPurge.addEventListener('click', async () => {
   if (!state.pdfLibDoc) { log('No PDF loaded.', 'warn'); return; }
 
+  // If there's unsaved text in watermark-input, add it to watermarkList
+  const initialVal = wmInput ? wmInput.value.trim() : '';
+  if (initialVal && !watermarkList.includes(initialVal)) {
+    watermarkList.push(initialVal);
+    renderChips();
+    wmInput.value = '';
+  }
+
+  state.isAwaitingConfirmation = false;
+
   // Freeze button
   ui.btnStartPurge.disabled = true;
   ui.btnStartPurge.textContent = '⚙️ Processing…';
@@ -969,47 +979,20 @@ ui.btnStartPurge.addEventListener('click', async () => {
         }
       }
 
-      // 2. User custom chips (always include them so the user can confirm them)
-      const userChipsCandidates = watermarkList.map(wm => ({
-        type: 'text',
-        key: wm,
-        label: `Custom Target: "${wm}"`,
-        checked: true
-      }));
-
-      // 3. Auto-detected keywords from text layer (if text exists)
-      if (pageTexts.length > 0) {
-        // Exclude those already in watermarkList to avoid duplicates
-        const autoKeywords = detectWatermarkKeywords(pageTexts, []).filter(
-          dk => !watermarkList.some(wm => wm.toUpperCase() === dk.text.toUpperCase())
-        );
-        detectedKeywords = autoKeywords.map(d => ({
-          type: 'text',
-          key: d.text,
-          label: `"${d.text}" found on ${d.pages} page(s)`,
-          checked: true
-        }));
-      }
-
-      // 4. Structural scan (OCG / XObject)
-      const rawStruct = await detectStructuralWatermarks();
-      structCandidates = rawStruct.map(s => ({
+      // Save detected candidates lists to state cache so they can be re-assembled in real-time
+      state.detectedKeywords = detectedKeywords;
+      state.structCandidates = structCandidates.map(s => ({
         type: s.type,
         ref: s.ref,
         label: s.label,
         checked: true
       }));
+      state.scannedCandidates = scannedCandidates;
 
-      // Combine detected items
-      const candidates = [
-        ...userChipsCandidates,
-        ...detectedKeywords,
-        ...structCandidates,
-        ...scannedCandidates
-      ];
+      state.isAwaitingConfirmation = true;
 
-      // Re-render checklist
-      renderCandidates(candidates);
+      // Render checklist (handles both auto-detected & custom chips in real-time)
+      updateConfirmationChecklist();
       setPhaseState(1, 'done');
 
       // Change status to prompt the user
@@ -1021,10 +1004,18 @@ ui.btnStartPurge.addEventListener('click', async () => {
       // Wait for user interaction
       const choice = await new Promise((resolve) => {
         const onConfirm = () => {
+          // Check if there is unsaved text in watermark-input, add it to watermarkList and include it!
+          const wmVal = wmInput ? wmInput.value.trim() : '';
+          if (wmVal && !watermarkList.includes(wmVal)) {
+            watermarkList.push(wmVal);
+            renderChips();
+            wmInput.value = '';
+          }
+
           const checkedBoxes = ui.candidatesSection.querySelectorAll('.candidate-chk:checked');
           const selected = Array.from(checkedBoxes).map(cb => {
             const idx = parseInt(cb.getAttribute('data-idx'));
-            return candidates[idx];
+            return state.currentCandidatesList[idx];
           });
           ui.btnConfirmPurge.removeEventListener('click', onConfirm);
           ui.btnAskGeminiDetection.removeEventListener('click', onAskGemini);
@@ -1044,6 +1035,7 @@ ui.btnStartPurge.addEventListener('click', async () => {
       if (choice.action === 'purge') {
         selectedCandidates = choice.selected;
         userConfirmed = true;
+        state.isAwaitingConfirmation = false;
       } else if (choice.action === 'gemini') {
         // Run Gemini Flow
         const key = state.geminiKey
@@ -1269,8 +1261,38 @@ function renderCandidates(candidates) {
   });
 }
 
+function updateConfirmationChecklist() {
+  const userChipsCandidates = watermarkList.map(wm => ({
+    type: 'text',
+    key: wm,
+    label: `Custom Target: "${wm}"`,
+    checked: true
+  }));
+
+  // Re-filter auto-detected keywords to exclude any that are now in watermarkList
+  const filteredKeywords = (state.detectedKeywords || []).filter(
+    dk => !watermarkList.some(wm => wm.toUpperCase() === dk.text.toUpperCase())
+  ).map(d => ({
+    type: 'text',
+    key: d.text,
+    label: `"${d.text}" found on ${d.pages} page(s)`,
+    checked: true
+  }));
+
+  const candidates = [
+    ...userChipsCandidates,
+    ...filteredKeywords,
+    ...(state.structCandidates || []),
+    ...(state.scannedCandidates || [])
+  ];
+
+  state.currentCandidatesList = candidates;
+  renderCandidates(candidates);
+}
+
 // ─── RESET ────────────────────────────────────────────────────────────────────
 function resetAll() {
+  state.isAwaitingConfirmation = false;
   state.rawBytes    = null;
   state.pdfLibDoc   = null;
   state.pdfjsDoc    = null;
@@ -1364,6 +1386,11 @@ function renderChips() {
   });
   if (wmInput) {
     wmInput.placeholder = watermarkList.length > 0 ? 'Add more…' : 'Type watermark and press Enter…';
+  }
+
+  // Real-time update of checklist if confirmation dialog is currently active
+  if (state.isAwaitingConfirmation && typeof updateConfirmationChecklist === 'function') {
+    updateConfirmationChecklist();
   }
 }
 
