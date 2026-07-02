@@ -1516,6 +1516,7 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
   log('Loading visual watermark templates…');
   await loadAllTemplates();
   setProgress(10);
+  const engineStartTime = performance.now();
 
   const doc = state.pdfLibDoc;
   const objects = doc.context.enumerateIndirectObjects();
@@ -1547,7 +1548,7 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
   let cleanedCount = 0;
 
   // Process images in parallel batches to keep CPU pipelines saturated
-  const BATCH_SIZE = 4;
+  const BATCH_SIZE = 8;
   for (let i = 0; i < total; i += BATCH_SIZE) {
     const batch = imageObjects.slice(i, i + BATCH_SIZE);
     const promises = batch.map(async (imgObj) => {
@@ -1562,6 +1563,11 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
       const ctx = canvas.getContext('2d');
 
       let decodedSuccessfully = false;
+
+      // Early skip: tiny placeholder images are not worth decoding
+      if (obj.contents && obj.contents.length < 500) {
+        return;
+      }
 
       // 1. Decode stream bytes
       if (filterStr.includes('DCTDecode') || filterStr.includes('JPXDecode')) {
@@ -1668,14 +1674,9 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
         if (didWipe) {
           ctx.putImageData(cleanedData, 0, 0);
 
-          // Convert canvas image back to raw JPEG bytes
-          const jpegUrl = canvas.toDataURL('image/jpeg', 0.92);
-          const base64Data = jpegUrl.split(',')[1];
-          const binaryString = atob(base64Data);
-          const newBytes = new Uint8Array(binaryString.length);
-          for (let k = 0; k < binaryString.length; k++) {
-            newBytes[k] = binaryString.charCodeAt(k);
-          }
+          // Convert canvas image back to raw JPEG bytes (fast blob path)
+          const jpegBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+          const newBytes = new Uint8Array(await jpegBlob.arrayBuffer());
 
           // In-place replace raw stream bytes
           obj.contents = newBytes;
@@ -1694,7 +1695,8 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
     setProgress(10 + Math.round((i / total) * 70));
   }
 
-  log(`✓ Purged ${cleanedCount} embedded image(s) in-place.`, 'green');
+  const elapsed = ((performance.now() - engineStartTime) / 1000).toFixed(1);
+  log(`✓ Purged ${cleanedCount} of ${total} image(s) in ${elapsed}s.`, 'green');
 }
 
 function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
@@ -1711,13 +1713,27 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
 
       const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
       const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-      if (max - min < 15) continue;
+      const d = max - min;
+      if (d < 15) continue;
 
-      const hsv = rgbToHsv(r, g, b);
-      if (hasRedMatch && ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180))) {
-        if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
+      // Inline HSV computation — avoids function call + array alloc per pixel
+      const rn = r / 255, gn = g / 255, bn = b / 255;
+      const maxn = max / 255, dn = d / 255;
+      let hue = 0;
+      if (d !== 0) {
+        if (max === r)      hue = (gn - bn) / dn + (g < b ? 6 : 0);
+        else if (max === g) hue = (bn - rn) / dn + 2;
+        else                hue = (rn - gn) / dn + 4;
+        hue /= 6;
       }
-      if (hasBlueMatch && (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80)) {
+      const h180 = (hue * 180 + 0.5) | 0;
+      const s255 = (maxn === 0 ? 0 : (dn / maxn) * 255 + 0.5) | 0;
+      const v255 = (maxn * 255 + 0.5) | 0;
+
+      if (hasRedMatch && ((h180 >= 0 && h180 <= 10) || (h180 >= 168 && h180 <= 180))) {
+        if (s255 >= 40 && v255 >= 40) redMask[i / 4] = 1;
+      }
+      if (hasBlueMatch && (h180 >= 95 && h180 <= 135 && s255 >= 50 && v255 >= 80)) {
         blueMask[i / 4] = 1;
       }
     }
@@ -1788,22 +1804,38 @@ function matchTemplateSparse(targetMask, targetW, targetH, template, searchX, se
   const maxX = searchX + searchW - tw, maxY = searchY + searchH - th;
   const COARSE_STEP = 6;
 
-  // 1. Coarse search (large step for extreme speed)
+  // Downsample points for coarse search to maximize speed
+  const COARSE_POINTS_LIMIT = 150;
+  const coarsePoints = [];
+  const coarseStep = Math.max(1, Math.ceil(uniquePoints.length / COARSE_POINTS_LIMIT));
+  for (let i = 0; i < uniquePoints.length; i += coarseStep) {
+    coarsePoints.push(uniquePoints[i]);
+  }
+
+  // 1. Coarse search (large step and downsampled points for extreme speed)
   for (let y = searchY; y <= maxY; y += COARSE_STEP) {
     for (let x = searchX; x <= maxX; x += COARSE_STEP) {
       let mc = 0;
-      for (let i = 0; i < uniquePoints.length; i++) {
-        const pt = uniquePoints[i], tx = x + pt.x, ty = y + pt.y;
+      for (let i = 0; i < coarsePoints.length; i++) {
+        const pt = coarsePoints[i], tx = x + pt.x, ty = y + pt.y;
         if (tx >= 0 && tx < targetW && ty >= 0 && ty < targetH && targetMask[ty * targetW + tx]) mc++;
       }
-      const score = mc / uniquePoints.length;
+      const score = mc / coarsePoints.length;
       if (score > bestScore) { bestScore = score; bestX = x; bestY = y; }
     }
   }
 
-  // 2. Fine search around the peak candidate (step of 1)
+  // 2. Fine search around the peak candidate (step of 1 using ALL unique points for maximum precision)
   if (bestScore >= 0.35) {
-    let fS = bestScore, fX = bestX, fY = bestY;
+    let fS = 0;
+    // Calculate actual score at best coarse position using all points
+    for (let i = 0; i < uniquePoints.length; i++) {
+      const pt = uniquePoints[i], tx = bestX + pt.x, ty = bestY + pt.y;
+      if (bestX >= 0 && tx < targetW && bestY >= 0 && ty < targetH && targetMask[ty * targetW + tx]) fS++;
+    }
+    fS = fS / uniquePoints.length;
+    let fX = bestX, fY = bestY;
+
     const startY = Math.max(searchY, bestY - COARSE_STEP);
     const endY = Math.min(maxY, bestY + COARSE_STEP);
     const startX = Math.max(searchX, bestX - COARSE_STEP);
@@ -1839,12 +1871,19 @@ function sampleCanvasBg(pixels, w, h, bx, by, bw, bh, mask) {
 function erasePoints(pixels, w, h, bx, by, points, bg) {
   points.forEach(pt => {
     const px = bx + pt.x, py = by + pt.y;
-    for (let dy = -2; dy <= 2; dy++)
-      for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -3; dy <= 3; dy++)
+      for (let dx = -3; dx <= 3; dx++) {
         const tx = px + dx, ty = py + dy;
         if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
           const idx = (ty * w + tx) * 4;
-          pixels[idx] = bg[0]; pixels[idx+1] = bg[1]; pixels[idx+2] = bg[2];
+          // Feather outer ring: blend 50/50 with original pixel
+          if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+            pixels[idx]   = (bg[0] + pixels[idx])   >> 1;
+            pixels[idx+1] = (bg[1] + pixels[idx+1]) >> 1;
+            pixels[idx+2] = (bg[2] + pixels[idx+2]) >> 1;
+          } else {
+            pixels[idx] = bg[0]; pixels[idx+1] = bg[1]; pixels[idx+2] = bg[2];
+          }
         }
       }
   });
