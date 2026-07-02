@@ -1455,6 +1455,61 @@ async function decompressZlib(bytes) {
   return new Uint8Array(buffer);
 }
 
+function decodePredictor(uncompressed, width, height, colors, bpc, predictor) {
+  if (predictor < 10) return uncompressed;
+
+  const bytesPerPixel = Math.max(1, Math.floor((colors * bpc) / 8));
+  const rowBytes = Math.ceil((width * colors * bpc) / 8);
+  const stride = 1 + rowBytes;
+  const out = new Uint8Array(rowBytes * height);
+
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * stride;
+    const outRowStart = y * rowBytes;
+    if (rowStart >= uncompressed.length) break;
+
+    const filterType = uncompressed[rowStart];
+
+    for (let x = 0; x < rowBytes; x++) {
+      const rawIdx = rowStart + 1 + x;
+      const outIdx = outRowStart + x;
+      if (rawIdx >= uncompressed.length) break;
+
+      const rawVal = uncompressed[rawIdx];
+      const leftVal = (x >= bytesPerPixel) ? out[outIdx - bytesPerPixel] : 0;
+      const upVal = (y > 0) ? out[outIdx - rowBytes] : 0;
+      const upLeftVal = (y > 0 && x >= bytesPerPixel) ? out[outIdx - rowBytes - bytesPerPixel] : 0;
+
+      let val = 0;
+      if (filterType === 0) {
+        val = rawVal;
+      } else if (filterType === 1) {
+        val = rawVal + leftVal;
+      } else if (filterType === 2) {
+        val = rawVal + upVal;
+      } else if (filterType === 3) {
+        val = rawVal + Math.floor((leftVal + upVal) / 2);
+      } else if (filterType === 4) {
+        val = rawVal + paethPredictor(leftVal, upVal, upLeftVal);
+      } else {
+        val = rawVal;
+      }
+      out[outIdx] = val & 0xff;
+    }
+  }
+  return out;
+}
+
+function paethPredictor(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  if (pb <= pc) return b;
+  return c;
+}
+
 async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
   log('══ Running CV Image Purge Engine (In-Place Embedded Image mode) ══', 'blue');
   setProgress(5);
@@ -1532,12 +1587,58 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
         }
       } else if (filterStr.includes('FlateDecode')) {
         try {
-          const uncompressed = await decompressZlib(obj.contents);
+          const decodeParms = dict.get(PDFLib.PDFName.of('DecodeParms'));
+          let predictor = 1;
+          let colors = 1;
+          let bpc = 8;
+
+          if (decodeParms instanceof PDFLib.PDFDict) {
+            const predObj = decodeParms.get(PDFLib.PDFName.of('Predictor'));
+            if (predObj) predictor = predObj.asNumber();
+
+            const colorsObj = decodeParms.get(PDFLib.PDFName.of('Colors'));
+            if (colorsObj) colors = colorsObj.asNumber();
+
+            const bpcObj = decodeParms.get(PDFLib.PDFName.of('BitsPerComponent'));
+            if (bpcObj) bpc = bpcObj.asNumber();
+          } else if (decodeParms instanceof PDFLib.PDFArray) {
+            decodeParms.asArray().forEach(parmRef => {
+              try {
+                const parm = doc.context.lookup(parmRef, PDFLib.PDFDict);
+                if (parm) {
+                  const predObj = parm.get(PDFLib.PDFName.of('Predictor'));
+                  if (predObj) predictor = predObj.asNumber();
+
+                  const colorsObj = parm.get(PDFLib.PDFName.of('Colors'));
+                  if (colorsObj) colors = colorsObj.asNumber();
+
+                  const bpcObj = parm.get(PDFLib.PDFName.of('BitsPerComponent'));
+                  if (bpcObj) bpc = bpcObj.asNumber();
+                }
+              } catch (_) {}
+            });
+          }
+
+          if (!decodeParms) {
+            const cs = dict.get(PDFLib.PDFName.of('ColorSpace'));
+            const csStr = cs ? cs.toString() : '';
+            if (csStr === '/DeviceRGB') colors = 3;
+            else if (csStr === '/DeviceGray') colors = 1;
+
+            const bpcObj = dict.get(PDFLib.PDFName.of('BitsPerComponent'));
+            if (bpcObj) bpc = bpcObj.asNumber();
+          }
+
+          let uncompressed = await decompressZlib(obj.contents);
+          if (predictor >= 10) {
+            uncompressed = decodePredictor(uncompressed, width, height, colors, bpc, predictor);
+          }
+
           const colorspace = dict.get(PDFLib.PDFName.of('ColorSpace'));
           const csStr = colorspace ? colorspace.toString() : '/DeviceRGB';
           const imgData = ctx.createImageData(width, height);
 
-          if (csStr === '/DeviceRGB') {
+          if (csStr === '/DeviceRGB' || colors === 3) {
             for (let k = 0, j = 0; k < uncompressed.length && j < imgData.data.length; k += 3, j += 4) {
               imgData.data[j] = uncompressed[k];
               imgData.data[j+1] = uncompressed[k+1];
@@ -1546,7 +1647,7 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
             }
             ctx.putImageData(imgData, 0, 0);
             decodedSuccessfully = true;
-          } else if (csStr === '/DeviceGray') {
+          } else if (csStr === '/DeviceGray' || colors === 1) {
             for (let k = 0, j = 0; k < uncompressed.length && j < imgData.data.length; k++, j += 4) {
               imgData.data[j] = imgData.data[j+1] = imgData.data[j+2] = uncompressed[k];
               imgData.data[j+3] = 255;
