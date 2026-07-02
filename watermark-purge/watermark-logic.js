@@ -1562,27 +1562,30 @@ async function runCVEngine(enabledTemplates = ['wc', 'jc', 'bb']) {
       // 2. Clean and write back
       if (decodedSuccessfully) {
         const imgData = ctx.getImageData(0, 0, width, height);
-        const cleanedData = purgeCanvasPixels(imgData, enabledTemplates);
-        ctx.putImageData(cleanedData, 0, 0);
+        const { imgData: cleanedData, didWipe } = purgeCanvasPixels(imgData, enabledTemplates);
+        
+        if (didWipe) {
+          ctx.putImageData(cleanedData, 0, 0);
 
-        // Convert canvas image back to raw JPEG bytes
-        const jpegUrl = canvas.toDataURL('image/jpeg', 0.92);
-        const base64Data = jpegUrl.split(',')[1];
-        const binaryString = atob(base64Data);
-        const newBytes = new Uint8Array(binaryString.length);
-        for (let k = 0; k < binaryString.length; k++) {
-          newBytes[k] = binaryString.charCodeAt(k);
+          // Convert canvas image back to raw JPEG bytes
+          const jpegUrl = canvas.toDataURL('image/jpeg', 0.92);
+          const base64Data = jpegUrl.split(',')[1];
+          const binaryString = atob(base64Data);
+          const newBytes = new Uint8Array(binaryString.length);
+          for (let k = 0; k < binaryString.length; k++) {
+            newBytes[k] = binaryString.charCodeAt(k);
+          }
+
+          // In-place replace raw stream bytes
+          obj.contents = newBytes;
+
+          // Reset Filter dictionary keys to DCTDecode and cleanup color properties
+          dict.set(PDFLib.PDFName.of('Filter'), PDFLib.PDFName.of('DCTDecode'));
+          dict.delete(PDFLib.PDFName.of('ColorSpace'));
+
+          cleanedCount++;
+          log(`  Cleaned image object (obj ${ref.objectNumber})`, 'green');
         }
-
-        // In-place replace raw stream bytes
-        obj.contents = newBytes;
-
-        // Reset Filter dictionary keys to DCTDecode and cleanup color properties
-        dict.set(PDFLib.PDFName.of('Filter'), PDFLib.PDFName.of('DCTDecode'));
-        dict.delete(PDFLib.PDFName.of('ColorSpace'));
-
-        cleanedCount++;
-        log(`  Cleaned image object (obj ${ref.objectNumber})`, 'green');
       }
     });
 
@@ -1619,12 +1622,16 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
     }
   }
 
+  const output = imgData; // In-place modification
+  let didWipe = false;
+
   if (enabledTemplates.includes('wc')) {
     const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
     const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
     if (resWc.score >= 0.35) {
       const bg = sampleCanvasBg(pixels, w, h, resWc.x, resWc.y, resWc.tw, resWc.th, redMask);
       erasePoints(pixels, w, h, resWc.x, resWc.y, resWc.points, bg);
+      didWipe = true;
     }
   }
 
@@ -1634,6 +1641,7 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
     if (resJc.score >= 0.35) {
       const bg = sampleCanvasBg(pixels, w, h, resJc.x, resJc.y, resJc.tw, resJc.th, redMask);
       erasePoints(pixels, w, h, resJc.x, resJc.y, resJc.points, bg);
+      didWipe = true;
     }
   }
 
@@ -1653,10 +1661,11 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
           const idx = (y * w + x) * 4;
           pixels[idx] = pixels[idx+1] = pixels[idx+2] = 255;
         }
+      didWipe = true;
     }
   }
 
-  return imgData;
+  return { imgData: output, didWipe };
 }
 
 function matchTemplateSparse(targetMask, targetW, targetH, template, searchX, searchY, searchW, searchH) {
