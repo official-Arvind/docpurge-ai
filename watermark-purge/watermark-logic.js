@@ -910,66 +910,90 @@ ui.btnStartPurge.addEventListener('click', async () => {
       let structCandidates = [];
       let scannedCandidates = [];
 
+      if (pdfType === 'vector') {
+        log('Scanning text layer for watermark keywords…');
+        detectedKeywords = detectWatermarkKeywords(pageTexts, watermarkList);
+        log(`  Found ${detectedKeywords.length} keyword candidate(s).`, 'dim');
+
+        log('Scanning PDF structure for watermark layers/objects…');
+        structCandidates = await detectStructuralWatermarks();
+        log(`  Found ${structCandidates.length} structural candidate(s).`, 'dim');
+      }
+
       // 1. Visual templates pre-match (for Scanned PDFs)
       if (pdfType === 'scanned') {
-        log('Running visual templates pre-match on Page 1…');
+        log('Running visual templates pre-match across first few pages…');
         await loadAllTemplates();
 
-        // Perform a pre-match check on Page 1 to see which built-in templates match
-        const page     = await state.pdfjsDoc.getPage(1);
-        const viewport = page.getViewport({ scale: 1.5 });
-        const canvas  = document.createElement('canvas');
-        canvas.width  = viewport.width;
-        canvas.height = viewport.height;
-        const ctx = canvas.getContext('2d');
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        let maxWcScore = 0;
+        let maxJcScore = 0;
+        let maxBbScore = 0;
 
-        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const w = imgData.width, h = imgData.height, pixels = imgData.data;
-        const redMask  = new Uint8Array(w * h);
-        const blueMask = new Uint8Array(w * h);
+        const maxPagesToPreMatch = Math.min(state.pdfjsDoc.numPages, 5);
+        for (let pNum = 1; pNum <= maxPagesToPreMatch; pNum++) {
+          try {
+            const page     = await state.pdfjsDoc.getPage(pNum);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas  = document.createElement('canvas');
+            canvas.width  = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+            await page.render({ canvasContext: ctx, viewport }).promise;
 
-        for (let i = 0; i < pixels.length; i += 4) {
-          const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
-          const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
-          const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
-          if (max - min < 15) continue;
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const w = imgData.width, h = imgData.height, pixels = imgData.data;
+            const redMask  = new Uint8Array(w * h);
+            const blueMask = new Uint8Array(w * h);
 
-          const hsv = rgbToHsv(r, g, b);
-          if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
-            if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
+            for (let i = 0; i < pixels.length; i += 4) {
+              const r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+              const max = r > g ? (r > b ? r : b) : (g > b ? g : b);
+              const min = r < g ? (r < b ? r : b) : (g < b ? g : b);
+              if (max - min < 15) continue;
+
+              const hsv = rgbToHsv(r, g, b);
+              if ((hsv[0] >= 0 && hsv[0] <= 10) || (hsv[0] >= 168 && hsv[0] <= 180)) {
+                if (hsv[1] >= 40 && hsv[2] >= 40) redMask[i / 4] = 1;
+              }
+              if (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80) blueMask[i / 4] = 1;
+            }
+
+            const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
+            const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
+            
+            const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
+            const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
+            
+            const sHBb = Math.round(h * 0.15);
+            const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
+
+            if (resWc.score > maxWcScore) maxWcScore = resWc.score;
+            if (resJc.score > maxJcScore) maxJcScore = resJc.score;
+            if (resBb.score > maxBbScore) maxBbScore = resBb.score;
+          } catch (err) {
+            log(`  Failed to pre-match page ${pNum}: ${err.message}`, 'dim');
           }
-          if (hsv[0] >= 95 && hsv[0] <= 135 && hsv[1] >= 50 && hsv[2] >= 80) blueMask[i / 4] = 1;
         }
 
-        const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
-        const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
-        
-        const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
-        const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
-        
-        const sHBb = Math.round(h * 0.15);
-        const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
-
-        log(`  Visual pre-match scores: Red Stamp(WC)=${resWc.score.toFixed(2)}, Red Stamp(JC)=${resJc.score.toFixed(2)}, Blue Banner=${resBb.score.toFixed(2)}`, 'dim');
+        log(`  Visual pre-match scores: Red Stamp(WC)=${maxWcScore.toFixed(2)}, Red Stamp(JC)=${maxJcScore.toFixed(2)}, Blue Banner=${maxBbScore.toFixed(2)}`, 'dim');
 
         scannedCandidates.push({
           type: 'template',
           key: 'wc',
-          label: `Red Stamp: "(AKM SIR)# J STAR" (Match: ${Math.round(resWc.score * 100)}%)`,
-          checked: resWc.score >= 0.35
+          label: `Red Stamp: "(AKM SIR)# J STAR" (Match: ${Math.round(maxWcScore * 100)}%)`,
+          checked: maxWcScore >= 0.35
         });
         scannedCandidates.push({
           type: 'template',
           key: 'jc',
-          label: `Red Stamp: "J*" (Match: ${Math.round(resJc.score * 100)}%)`,
-          checked: resJc.score >= 0.35
+          label: `Red Stamp: "J*" (Match: ${Math.round(maxJcScore * 100)}%)`,
+          checked: maxJcScore >= 0.35
         });
         scannedCandidates.push({
           type: 'template',
           key: 'bb',
-          label: `Blue Banner: "Referral Code" (Match: ${Math.round(resBb.score * 100)}%)`,
-          checked: resBb.score >= 0.35
+          label: `Blue Banner: "Referral Code" (Match: ${Math.round(maxBbScore * 100)}%)`,
+          checked: maxBbScore >= 0.35
         });
       }
 
@@ -1181,7 +1205,7 @@ async function doPhase5() {
     log(`  ${origSize} → ${newSize} (${reduction > 0 ? '-' + reduction + '%' : 'same size'})`, 'green');
     log('  Download ready. File never left your browser.', 'dim');
 
-    const baseName = state.fileName.replace(/\.pdf$/i, '');
+    const baseName = state.fileName.replace(/\.+pdf$/i, '');
     state._downloadName = `${baseName}_PURGED.pdf`;
 
     ui.downloadSummary.innerHTML = `
@@ -1598,7 +1622,7 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
   if (enabledTemplates.includes('wc')) {
     const sHWc = Math.round(h * 0.35), sWWc = Math.round(w * 0.45);
     const resWc = matchTemplateSparse(redMask, w, h, templates.wc, w - sWWc, 0, sWWc, sHWc);
-    if (resWc.score >= 0.45) {
+    if (resWc.score >= 0.35) {
       const bg = sampleCanvasBg(pixels, w, h, resWc.x, resWc.y, resWc.tw, resWc.th, redMask);
       erasePoints(pixels, w, h, resWc.x, resWc.y, resWc.points, bg);
     }
@@ -1607,7 +1631,7 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
   if (enabledTemplates.includes('jc')) {
     const sHJc = Math.round(h * 0.55), sWJc = Math.round(w * 0.45);
     const resJc = matchTemplateSparse(redMask, w, h, templates.jc, w - sWJc, 0, sWJc, sHJc);
-    if (resJc.score >= 0.45) {
+    if (resJc.score >= 0.35) {
       const bg = sampleCanvasBg(pixels, w, h, resJc.x, resJc.y, resJc.tw, resJc.th, redMask);
       erasePoints(pixels, w, h, resJc.x, resJc.y, resJc.points, bg);
     }
@@ -1616,7 +1640,7 @@ function purgeCanvasPixels(imgData, enabledTemplates = ['wc', 'jc', 'bb']) {
   if (enabledTemplates.includes('bb')) {
     const sHBb = Math.round(h * 0.15);
     const resBb = matchTemplateSparse(blueMask, w, h, templates.bb, 0, h - sHBb, w, sHBb);
-    if (resBb.score >= 0.45) {
+    if (resBb.score >= 0.35) {
       const by = resBb.y, scale = w / 1462.0, curveWidth = Math.round(120 * scale);
       for (let y = by - 3; y < h; y++)
         for (let x = 0; x < w; x++) {
